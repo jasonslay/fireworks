@@ -1,0 +1,36 @@
+[package]
+name = "fireworks"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.16", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_log",
+    "x11",
+    "wayland",
+    "png",
+    "tonemapping_luts",
+    "ktx2",
+    "zstd",
+] }
+rand = "0.8"
+
+# Fast runtime even in dev builds (bevy is unusably slow unoptimized)
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
