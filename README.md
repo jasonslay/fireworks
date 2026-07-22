@@ -2,11 +2,23 @@
 
 A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
 
+The scene is a moonlit night over the Front Range west of Loveland, Colorado —
+distant peaks with snowfields, dark hogback foothills, and foreground hills that
+catch light from each burst. Shells launch from the valley floor behind the near
+ridgeline; rising tails and falling embers appear and disappear around it.
+
+## Requirements
+
+- [Rust](https://rustup.rs/) 1.85 or newer (edition 2024)
+
 ## Run
 
 ```bash
 cargo run --release
 ```
+
+The app starts in borderless fullscreen on the primary monitor. Press **F11** to
+toggle windowed mode, or **Esc** to quit.
 
 ## Controls
 
@@ -14,12 +26,13 @@ cargo run --release
 |-------|--------|
 | Left click | Launch a shell that bursts at the clicked point |
 | Space | Finale salvo (8 shells at once) |
-| A | Toggle automatic launching |
+| A | Toggle automatic launching (on by default) |
 | F11 | Toggle borderless fullscreen |
 | Esc | Quit |
 
-The window is freely resizable; the scene scales uniformly to fit (a fixed
-1280x800 virtual view, with extra sky and sides revealed on larger screens).
+The window is freely resizable. The scene uses a fixed 1280×800 virtual view
+that scales uniformly to fit; taller or wider screens reveal extra sky and
+horizon rather than stretching the composition.
 
 ## What makes it look real
 
@@ -33,5 +46,20 @@ The window is freely resizable; the scene scales uniformly to fit (a fixed
 - **Physics** – gravity, per-star aerodynamic drag, and a slowly wandering wind.
 - **HDR + bloom** – particles render at HDR intensities through a soft radial
   texture and a bloom pass, so bright stars genuinely glow.
-- Detonation flash, sparky propellant tails on rising shells, burn flicker,
-  twinkling background stars, and a moonlit night sky.
+- **Night sky** – twinkling stars, a cratered moon, occasional faint satellite
+  passes, and a soft horizon glow.
+- **Landscape** – layered mountain silhouettes with moonlit snow, plus
+  foreground hills whose mottled surface is relit by each burst.
+
+## Screenshot helper
+
+For headless captures (e.g. CI or thumbnails), set `FIREWORKS_SHOT` to an output
+path. The app runs windowed, saves a screenshot after a few seconds, then exits:
+
+```bash
+FIREWORKS_SHOT=shot.png cargo run --release
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
