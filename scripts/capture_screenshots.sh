@@ -23,7 +23,7 @@ capture_png() {
   "$BIN"
 
   ffmpeg -y -loglevel error -i "$tmp" \
-    -vf "scale=${CAPTURE_WIDTH}:-1:flags=lanczos" "$out"
+    -vf "scale=${CAPTURE_WIDTH}:800:flags=lanczos" "$out"
 }
 
 capture_gif() {
@@ -42,7 +42,8 @@ capture_gif() {
 
   ffmpeg -y -loglevel error \
     -framerate 15 -i "$tmp/frame_%04d.png" \
-    -vf "fps=12,scale=${CAPTURE_WIDTH}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer" \
+    -vf "fps=12,scale=${CAPTURE_WIDTH}:800:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=full[p];[s1][p]paletteuse=dither=bayer:diff_mode=none" \
+    -gifflags -offsetting \
     -loop 0 "$out"
 }
 
