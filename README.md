@@ -71,25 +71,18 @@ with the root `index.html` (pass `--no-default-features` via Trunk config).
 
 ### Releases and GitHub Pages
 
-GitHub Actions builds the Linux binary and web bundle on every push and pull
-request. To publish a release:
-
-1. In the repo on GitHub, go to **Settings → Pages** and set **Build and
-   deployment** source to **GitHub Actions**.
-2. Tag a release and push it:
-
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-
-The [Release workflow](.github/workflows/release.yml) uploads
-`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz` to GitHub Releases
-and deploys the web bundle to GitHub Pages (typically at
+GitHub Actions runs [CI](.github/workflows/ci.yml) on pull requests and the
+[Release workflow](.github/workflows/release.yml) on every push to `main`. Each
+main push builds the Linux binary and web bundle, publishes a GitHub Release
+(`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz`), and deploys the
+web demo to GitHub Pages (typically at
 `https://jasonslay.github.io/fireworks/`).
 
+Release tags are generated automatically from `Cargo.toml` plus the workflow
+run number (for example `v0.1.0.42`).
+
 You can also run the Release workflow manually from the **Actions** tab to
-redeploy the site without creating a new tag.
+rebuild and redeploy without pushing to `main`.
 
 ## Controls
 
