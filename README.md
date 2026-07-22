@@ -6,7 +6,7 @@ A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.o
   <img src="docs/screenshots/demo.gif" alt="Fireworks finale over the Front Range" width="1280" />
 </p>
 
-The scene is a moonlit night over the Front Range west of Loveland, Colorado —
+The scene is a moonlit night over the Front Range of Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.

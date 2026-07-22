@@ -696,7 +696,7 @@ fn setup(
         ),
     );
 
-    // The Front Range as seen looking west from Loveland, CO. Two layers:
+    // The Front Range of Colorado. Two layers:
     // the high peaks (Longs/Meeker massif to the southwest, Mummy Range to
     // the north) with faint moonlit snowfields, and the dark hogback
     // foothills in front. Both sit behind the particles (low z), so the
@@ -825,7 +825,7 @@ fn setup(
     }
 }
 
-/// Skyline of the Front Range looking west from Loveland, CO, as
+/// Skyline of the Front Range of Colorado, as
 /// (x, height-above-GROUND_Y) control points. Screen left = south.
 /// Landmarks, south to north: foothills toward Boulder, Twin Sisters, the
 /// Mount Meeker / Longs Peak massif (blocky flat top with the notch between
