@@ -55,6 +55,9 @@ fn main() {
             target: 8.0,
             retarget: 5.0,
         })
+        .insert_resource(SatelliteSpawner {
+            timer: Timer::from_seconds(6.0, TimerMode::Once),
+        })
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -68,6 +71,8 @@ fn main() {
                 update_flashes,
                 twinkle_stars,
                 light_foreground_hills,
+                spawn_satellites,
+                update_satellites,
             ),
         );
 
@@ -208,6 +213,19 @@ struct Star {
     phase: f32,
     speed: f32,
     base: f32,
+}
+
+#[derive(Resource)]
+struct SatelliteSpawner {
+    timer: Timer,
+}
+
+/// A very faint steady point of light drifting slowly across the sky.
+#[derive(Component)]
+struct Satellite {
+    vel: Vec2,
+    base: f32,
+    phase: f32,
 }
 
 /// Invisible light source left behind by a burst; used to relight the
@@ -1497,6 +1515,75 @@ fn light_foreground_hills(
     }
 
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+}
+
+fn spawn_satellites(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut spawner: ResMut<SatelliteSpawner>,
+    tex: Res<ParticleTexture>,
+    existing: Query<&Satellite>,
+) {
+    spawner.timer.tick(time.delta());
+    if !spawner.timer.finished() {
+        return;
+    }
+    let mut rng = thread_rng();
+    spawner
+        .timer
+        .set_duration(Duration::from_secs_f32(rng.gen_range(18.0..50.0)));
+    spawner.timer.reset();
+
+    // At most a couple in the sky at once; they should feel like a treat.
+    if existing.iter().count() >= 2 {
+        return;
+    }
+
+    // Just outside the widest plausible view (ultrawide fullscreen ~ +-930),
+    // so they enter the frame within a few seconds of spawning.
+    let from_left = rng.gen_bool(0.5);
+    let x = if from_left { -980.0 } else { 980.0 };
+    let y = rng.gen_range(120.0..850.0);
+    // Sized so a pass crosses the ~1280-unit view in roughly 30 seconds.
+    let speed = rng.gen_range(38.0..50.0);
+    let vx = if from_left { speed } else { -speed };
+    let vy = rng.gen_range(-5.0..5.0);
+    let base = rng.gen_range(0.06..0.20);
+
+    commands.spawn((
+        Sprite {
+            image: tex.0.clone(),
+            color: Color::linear_rgba(base, base, base * 1.05, 1.0),
+            custom_size: Some(Vec2::splat(4.5)),
+            ..default()
+        },
+        Transform::from_xyz(x, y, 0.5),
+        Satellite {
+            vel: Vec2::new(vx, vy),
+            base,
+            phase: rng.gen_range(0.0..TAU),
+        },
+    ));
+}
+
+fn update_satellites(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut sats: Query<(Entity, &Satellite, &mut Transform, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    let t = time.elapsed_secs();
+    for (entity, sat, mut tf, mut sprite) in &mut sats {
+        tf.translation.x += sat.vel.x * dt;
+        tf.translation.y += sat.vel.y * dt;
+        if tf.translation.x.abs() > 1030.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        // Slow shimmer, like a tumbling body catching sunlight.
+        let b = sat.base * (0.75 + 0.25 * (t * 0.9 + sat.phase).sin());
+        sprite.color = Color::linear_rgba(b, b, b * 1.05, 1.0);
+    }
 }
 
 fn twinkle_stars(time: Res<Time>, mut stars: Query<(&Star, &mut Sprite)>) {
