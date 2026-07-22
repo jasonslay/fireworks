@@ -11,7 +11,10 @@
 
 use bevy::{
     asset::RenderAssetUsages,
-    core_pipeline::{bloom::Bloom, tonemapping::Tonemapping},
+    core_pipeline::{
+        bloom::Bloom,
+        tonemapping::{DebandDither, Tonemapping},
+    },
     prelude::*,
     render::camera::ScalingMode,
     render::mesh::{Indices, PrimitiveTopology},
@@ -27,6 +30,9 @@ use std::time::Duration;
 
 const GRAVITY: f32 = -240.0;
 const GROUND_Y: f32 = -370.0;
+const DESIGN_WIDTH: f32 = 1280.0;
+const DESIGN_HEIGHT: f32 = 800.0;
+const DESIGN_CAMERA_Y: f32 = -400.0;
 
 fn main() {
     let screenshot = screenshot_path();
@@ -59,10 +65,13 @@ fn main() {
         .insert_resource(SatelliteSpawner {
             timer: Timer::from_seconds(6.0, TimerMode::Once),
         })
-        .add_systems(Startup, (setup, apply_scene).chain())
+        .insert_resource(NativeMode(native_mode_requested()))
+        .add_systems(Startup, (init_scene_root, setup, apply_scene).chain())
+        .add_systems(PostStartup, sync_native_view)
         .add_systems(
             Update,
             (
+                sync_native_view,
                 handle_input,
                 auto_launch,
                 update_wind,
@@ -97,6 +106,118 @@ fn screenshot_path() -> Option<String> {
 
 fn frame_dir() -> Option<PathBuf> {
     std::env::var("FIREWORKS_FRAME_DIR").ok().map(PathBuf::from)
+}
+
+fn native_mode_requested() -> bool {
+    if capture_mode() {
+        return false;
+    }
+    std::env::var("FIREWORKS_NATIVE")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+#[derive(Resource, Clone, Copy)]
+struct NativeMode(bool);
+
+#[derive(Resource, Clone, Copy)]
+struct SceneRoot {
+    entity: Entity,
+    scale: f32,
+}
+
+#[derive(Component)]
+struct SceneRootMarker;
+
+fn scale_for_window(window: &Window) -> f32 {
+    let w = window.resolution.physical_width() as f32;
+    let h = window.resolution.physical_height() as f32;
+    if w <= 0.0 || h <= 0.0 {
+        return 1.0;
+    }
+    (w / DESIGN_WIDTH).min(h / DESIGN_HEIGHT)
+}
+
+fn spawn_in_scene(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    bundle: impl Bundle,
+) -> Entity {
+    if let Some(scene) = scene {
+        commands.spawn((bundle, ChildOf(scene.entity))).id()
+    } else {
+        commands.spawn(bundle).id()
+    }
+}
+
+fn init_scene_root(mut commands: Commands, native: Res<NativeMode>) {
+    if !native.0 {
+        return;
+    }
+    let entity = commands
+        .spawn((
+            Transform::from_scale(Vec3::ONE),
+            Visibility::default(),
+            SceneRootMarker,
+        ))
+        .id();
+    commands.insert_resource(SceneRoot { entity, scale: 1.0 });
+}
+
+fn sync_native_view(
+    native: Res<NativeMode>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    scene: Option<ResMut<SceneRoot>>,
+    mut scene_tf: Query<&mut Transform, With<SceneRootMarker>>,
+    mut projections: Query<&mut Projection, With<Camera2d>>,
+    mut cameras: Query<
+        &mut Transform,
+        (With<Camera2d>, Without<SceneRootMarker>),
+    >,
+    mut last_size: Local<Option<(u32, u32)>>,
+) {
+    if !native.0 {
+        return;
+    }
+    let Some(mut scene) = scene else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let w = window.resolution.physical_width();
+    let h = window.resolution.physical_height();
+    if w == 0 || h == 0 {
+        return;
+    }
+    if last_size.as_ref() == Some(&(w, h)) {
+        return;
+    }
+    *last_size = Some((w, h));
+
+    let scale = scale_for_window(window);
+    scene.scale = scale;
+    info!(
+        "Native resolution: {}x{} ({:.2}x the 1280x800 design)",
+        w,
+        h,
+        scale
+    );
+
+    for mut tf in &mut scene_tf {
+        tf.scale = Vec3::splat(scale);
+    }
+    for mut projection in &mut projections {
+        if let Projection::Orthographic(ref mut ortho) = *projection {
+            ortho.scaling_mode = ScalingMode::AutoMin {
+                min_width: DESIGN_WIDTH * scale,
+                min_height: DESIGN_HEIGHT * scale,
+            };
+        }
+    }
+    for mut camera in &mut cameras {
+        camera.translation.y = DESIGN_CAMERA_Y * scale;
+    }
 }
 
 #[derive(Resource)]
@@ -231,6 +352,7 @@ fn finish_frame_capture(
 fn apply_scene(
     mut commands: Commands,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
     mut launcher: ResMut<Launcher>,
     mut wind: ResMut<Wind>,
     mut spawner: ResMut<SatelliteSpawner>,
@@ -249,7 +371,10 @@ fn apply_scene(
 
     match std::env::var("FIREWORKS_SCENE").as_deref() {
         Ok("night") => {
-            commands.spawn((
+            spawn_in_scene(
+                &mut commands,
+                scene.as_deref(),
+                (
                 Sprite {
                     image: tex.0.clone(),
                     color: Color::linear_rgba(0.14, 0.14, 0.15, 1.0),
@@ -262,11 +387,13 @@ fn apply_scene(
                     base: 0.16,
                     phase: 1.2,
                 },
-            ));
+                ),
+            );
         }
         Ok("burst") => {
             spawn_burst(
                 &mut commands,
+                scene.as_deref(),
                 &tex.0,
                 &mut rng,
                 Vec2::new(60.0, 230.0),
@@ -285,7 +412,15 @@ fn apply_scene(
                 (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
             ];
             for (pos, kind, palette) in bursts {
-                spawn_burst(&mut commands, &tex.0, &mut rng, pos, kind, palette);
+                spawn_burst(
+                    &mut commands,
+                    scene.as_deref(),
+                    &tex.0,
+                    &mut rng,
+                    pos,
+                    kind,
+                    palette,
+                );
             }
         }
         _ => {}
@@ -439,7 +574,22 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    native: Res<NativeMode>,
+    scene: Option<Res<SceneRoot>>,
 ) {
+    let view_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
+    let projection = if native.0 {
+        ScalingMode::AutoMin {
+            min_width: DESIGN_WIDTH * view_scale,
+            min_height: DESIGN_HEIGHT * view_scale,
+        }
+    } else {
+        ScalingMode::AutoMin {
+            min_width: DESIGN_WIDTH,
+            min_height: DESIGN_HEIGHT,
+        }
+    };
+
     commands.spawn((
         Camera2d,
         Camera {
@@ -448,6 +598,7 @@ fn setup(
             ..default()
         },
         Tonemapping::TonyMcMapface,
+        DebandDither::Enabled,
         Bloom {
             intensity: 0.35,
             ..Bloom::NATURAL
@@ -456,17 +607,18 @@ fn setup(
         // window. The view is anchored at the bottom (viewport_origin), so
         // aspect ratios taller than 1280x800 reveal extra sky at the top
         // instead of more foreground hillside at the bottom.
+        //
+        // With FIREWORKS_NATIVE=1 the minimum view matches the monitor so the
+        // 1280x800 design space maps 1:1 to pixels (via SceneRoot scaling).
         Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::AutoMin {
-                min_width: 1280.0,
-                min_height: 800.0,
-            },
+            scaling_mode: projection,
             viewport_origin: Vec2::new(0.5, 0.0),
             ..OrthographicProjection::default_2d()
         }),
-        Transform::from_xyz(0.0, -400.0, 0.0),
+        Transform::from_xyz(0.0, DESIGN_CAMERA_Y * view_scale, 0.0),
     ));
 
+    let scene = scene.as_deref();
     let tex = images.add(make_radial_texture(48));
     commands.insert_resource(ParticleTexture(tex.clone()));
 
@@ -479,7 +631,10 @@ fn setup(
         let y = rng.gen_range(GROUND_Y + 30.0..1000.0);
         let size = rng.gen_range(0.8..2.4);
         let base = rng.gen_range(0.15..0.8);
-        commands.spawn((
+        spawn_in_scene(
+            &mut commands,
+            scene,
+            (
             Sprite {
                 image: tex.clone(),
                 color: Color::linear_rgba(base, base, base * 1.1, 1.0),
@@ -492,11 +647,15 @@ fn setup(
                 speed: rng.gen_range(0.5..2.5),
                 base,
             },
-        ));
+            ),
+        );
     }
 
     // Moon: crisp cratered disc plus a soft atmospheric halo behind it.
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(0.055, 0.060, 0.075, 1.0),
@@ -504,9 +663,13 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(470.0, 300.0, 0.9),
-    ));
+        ),
+    );
     let moon_tex = images.add(make_moon_texture(256));
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Sprite {
             image: moon_tex,
             color: Color::linear_rgba(0.95, 0.93, 0.86, 1.0),
@@ -514,11 +677,15 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(470.0, 300.0, 1.0),
-    ));
+        ),
+    );
 
     // Faint sky glow hugging the horizon (valley light pollution + airglow),
     // sitting behind the mountains so the ridgeline reads as a silhouette.
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(0.018, 0.024, 0.052, 1.0),
@@ -526,7 +693,8 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(0.0, GROUND_Y + 60.0, 1.8),
-    ));
+        ),
+    );
 
     // The Front Range as seen looking west from Loveland, CO. Two layers:
     // the high peaks (Longs/Meeker massif to the southwest, Mummy Range to
@@ -547,11 +715,15 @@ fn setup(
             color: Vec3::new(0.0085, 0.0100, 0.0170),
         }),
     );
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Mesh2d(meshes.add(far)),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::WHITE))),
         Transform::from_xyz(0.0, 0.0, 2.0),
-    ));
+        ),
+    );
 
     let foothills = hogback_profile(&mut rng);
     let near = ridge_mesh_from_profile(
@@ -564,11 +736,15 @@ fn setup(
         Vec3::new(0.0005, 0.0007, 0.0018),
         None,
     );
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Mesh2d(meshes.add(near)),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::WHITE))),
         Transform::from_xyz(0.0, 0.0, 2.2),
-    ));
+        ),
+    );
 
     // Foreground hills closest to the viewer, drawn in FRONT of the
     // fireworks (z above the particles). Shells launch from the valley
@@ -630,13 +806,23 @@ fn setup(
         albedo,
     });
 
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene,
+        (
         Mesh2d(front_handle),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::WHITE))),
         Transform::from_xyz(0.0, 0.0, 8.0),
-    ));
+        ),
+    );
 
-    info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F11 = fullscreen, Esc = quit");
+    if native.0 {
+        info!(
+            "Native resolution mode (FIREWORKS_NATIVE=1). Controls: click = launch, Space = finale, A = auto-launch, F11 = fullscreen, Esc = quit"
+        );
+    } else {
+        info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F11 = fullscreen, Esc = quit");
+    }
 }
 
 /// Skyline of the Front Range looking west from Loveland, CO, as
@@ -990,6 +1176,7 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
 
 fn launch_shell(
     commands: &mut Commands,
+    scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     rng: &mut ThreadRng,
     launch_x: f32,
@@ -998,7 +1185,10 @@ fn launch_shell(
     let h = (apex_y - GROUND_Y).max(120.0);
     let v0 = (2.0 * -GRAVITY * h).sqrt();
     let fuse = (v0 / -GRAVITY) * rng.gen_range(0.86..0.97);
-    commands.spawn((
+    spawn_in_scene(
+        commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(9.0, 6.5, 3.5, 1.0),
@@ -1013,7 +1203,8 @@ fn launch_shell(
             palette: random_palette(rng),
             tail_timer: 0.0,
         },
-    ));
+        ),
+    );
 }
 
 fn auto_launch(
@@ -1021,6 +1212,7 @@ fn auto_launch(
     time: Res<Time>,
     mut launcher: ResMut<Launcher>,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
 ) {
     if !launcher.auto {
         return;
@@ -1034,7 +1226,14 @@ fn auto_launch(
     for _ in 0..count {
         let x = rng.gen_range(-540.0..540.0);
         let apex = rng.gen_range(70.0..400.0);
-        launch_shell(&mut commands, &tex.0, &mut rng, x, apex);
+        launch_shell(
+            &mut commands,
+            scene.as_deref(),
+            &tex.0,
+            &mut rng,
+            x,
+            apex,
+        );
     }
     launcher
         .timer
@@ -1045,6 +1244,7 @@ fn auto_launch(
 fn handle_input(
     mut commands: Commands,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
     mut launcher: ResMut<Launcher>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1053,6 +1253,7 @@ fn handle_input(
     mut exit: EventWriter<AppExit>,
 ) {
     let mut rng = thread_rng();
+    let design_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
 
     if keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
@@ -1076,7 +1277,14 @@ fn handle_input(
         for _ in 0..8 {
             let x = rng.gen_range(-580.0..580.0);
             let apex = rng.gen_range(40.0..420.0);
-            launch_shell(&mut commands, &tex.0, &mut rng, x, apex);
+            launch_shell(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                &mut rng,
+                x,
+                apex,
+            );
         }
     }
     if mouse.just_pressed(MouseButton::Left) {
@@ -1085,8 +1293,15 @@ fn handle_input(
         };
         if let Some(cursor) = window.cursor_position() {
             if let Ok(world) = camera.viewport_to_world_2d(cam_tf, cursor) {
-                let x = world.x + rng.gen_range(-15.0..15.0);
-                launch_shell(&mut commands, &tex.0, &mut rng, x, world.y);
+                let x = world.x / design_scale + rng.gen_range(-15.0..15.0);
+                launch_shell(
+                    &mut commands,
+                    scene.as_deref(),
+                    &tex.0,
+                    &mut rng,
+                    x,
+                    world.y / design_scale,
+                );
             }
         }
     }
@@ -1112,6 +1327,7 @@ fn update_shells(
     time: Res<Time>,
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
     mut shells: Query<(Entity, &mut Shell, &mut Transform)>,
 ) {
     let dt = time.delta_secs();
@@ -1133,6 +1349,7 @@ fn update_shells(
             let pos = tf.translation.truncate() + jitter;
             spawn_trail_bit(
                 &mut commands,
+                scene.as_deref(),
                 &tex.0,
                 pos,
                 -shell.vel * 0.08 + Vec2::new(rng.gen_range(-14.0..14.0), rng.gen_range(-20.0..6.0)),
@@ -1144,7 +1361,15 @@ fn update_shells(
 
         if shell.fuse <= 0.0 {
             let pos = tf.translation.truncate();
-            spawn_burst(&mut commands, &tex.0, &mut rng, pos, shell.kind, shell.palette);
+            spawn_burst(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                &mut rng,
+                pos,
+                shell.kind,
+                shell.palette,
+            );
             commands.entity(entity).despawn();
         }
     }
@@ -1163,9 +1388,18 @@ fn shell_dir(rng: &mut impl Rng) -> Vec2 {
     Vec2::from_angle(a) * (1.0 - w * w).sqrt()
 }
 
-fn spawn_spark(commands: &mut Commands, tex: &Handle<Image>, pos: Vec2, spark: Spark) {
+fn spawn_spark(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    pos: Vec2,
+    spark: Spark,
+) {
     let quad = spark.size * 4.2;
-    commands.spawn((
+    spawn_in_scene(
+        commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(12.0, 12.0, 12.0, 1.0),
@@ -1174,18 +1408,23 @@ fn spawn_spark(commands: &mut Commands, tex: &Handle<Image>, pos: Vec2, spark: S
         },
         Transform::from_xyz(pos.x, pos.y, 4.0),
         spark,
-    ));
+        ),
+    );
 }
 
 fn spawn_flash(
     commands: &mut Commands,
+    scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     pos: Vec2,
     size: f32,
     life: f32,
     color: Vec3,
 ) {
-    commands.spawn((
+    spawn_in_scene(
+        commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(color.x * 10.0, color.y * 10.0, color.z * 10.0, 1.0),
@@ -1198,11 +1437,13 @@ fn spawn_flash(
             max_life: life,
             color,
         },
-    ));
+        ),
+    );
 }
 
 fn spawn_burst(
     commands: &mut Commands,
+    scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     rng: &mut impl Rng,
     pos: Vec2,
@@ -1211,17 +1452,29 @@ fn spawn_burst(
 ) {
     // The initial detonation flash that briefly lights the sky.
     let flash_color = pal.0 * 0.4 + Vec3::splat(0.6);
-    spawn_flash(commands, tex, pos, rng.gen_range(220.0..340.0), 0.17, flash_color);
+    spawn_flash(
+        commands,
+        scene,
+        tex,
+        pos,
+        rng.gen_range(220.0..340.0),
+        0.17,
+        flash_color,
+    );
 
     // Invisible light that tints the foreground hills while the stars burn.
-    commands.spawn((
+    spawn_in_scene(
+        commands,
+        scene,
+        (
         Transform::from_xyz(pos.x, pos.y, 0.0),
         BurstLight {
             life: 1.9,
             max_life: 1.9,
             color: pal.0 * 0.75 + Vec3::splat(0.25),
         },
-    ));
+        ),
+    );
 
     match kind {
         BurstKind::Peony => {
@@ -1231,6 +1484,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.3..1.8);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1251,6 +1505,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.0..1.4);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1273,6 +1528,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.5..2.0);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1298,6 +1554,7 @@ fn spawn_burst(
                 let life = rng.gen_range(2.6..3.5);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1326,6 +1583,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.4..1.9);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1348,6 +1606,7 @@ fn spawn_burst(
                 let life = rng.gen_range(0.4..0.9);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1375,6 +1634,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.2..1.5);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1397,6 +1657,7 @@ fn spawn_burst(
                 let life = rng.gen_range(1.6..2.1);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1428,6 +1689,7 @@ fn spawn_burst(
                 let life = rng.gen_range(2.2..3.1);
                 spawn_spark(
                     commands,
+                    scene,
                     tex,
                     pos,
                     Spark {
@@ -1458,6 +1720,7 @@ fn update_sparks(
     time: Res<Time>,
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
     mut sparks: Query<(Entity, &mut Spark, &mut Transform, &mut Sprite)>,
 ) {
     let dt = time.delta_secs();
@@ -1485,13 +1748,22 @@ fn update_sparks(
         // Crossette break: the star pops into a small cross of fragments.
         if spark.split_at > 0.0 && age >= spark.split_at {
             let pos = tf.translation.truncate();
-            spawn_flash(&mut commands, &tex.0, pos, 60.0, 0.1, spark.color);
+            spawn_flash(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                pos,
+                60.0,
+                0.1,
+                spark.color,
+            );
             let base_angle = rng.gen_range(0.0..TAU);
             for i in 0..4 {
                 let a = base_angle + i as f32 * TAU / 4.0;
                 let life = rng.gen_range(0.5..0.8);
                 spawn_spark(
                     &mut commands,
+                    scene.as_deref(),
                     &tex.0,
                     pos,
                     Spark {
@@ -1518,6 +1790,7 @@ fn update_sparks(
                 let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
                 spawn_trail_bit(
                     &mut commands,
+                    scene.as_deref(),
                     &tex.0,
                     tf.translation.truncate() + jitter,
                     spark.vel * 0.06,
@@ -1568,6 +1841,7 @@ fn spark_color(spark: &Spark, age: f32, now: f32) -> (Vec3, f32) {
 
 fn spawn_trail_bit(
     commands: &mut Commands,
+    scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     pos: Vec2,
     vel: Vec2,
@@ -1575,7 +1849,10 @@ fn spawn_trail_bit(
     life: f32,
     size: f32,
 ) {
-    commands.spawn((
+    spawn_in_scene(
+        commands,
+        scene,
+        (
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(color.x * 3.0, color.y * 3.0, color.z * 3.0, 1.0),
@@ -1589,7 +1866,8 @@ fn spawn_trail_bit(
             max_life: life,
             color,
         },
-    ));
+        ),
+    );
 }
 
 fn update_trails(
@@ -1704,6 +1982,7 @@ fn spawn_satellites(
     time: Res<Time>,
     mut spawner: ResMut<SatelliteSpawner>,
     tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
     existing: Query<&Satellite>,
 ) {
     spawner.timer.tick(time.delta());
@@ -1732,7 +2011,10 @@ fn spawn_satellites(
     let vy = rng.gen_range(-5.0..5.0);
     let base = rng.gen_range(0.06..0.20);
 
-    commands.spawn((
+    spawn_in_scene(
+        &mut commands,
+        scene.as_deref(),
+        (
         Sprite {
             image: tex.0.clone(),
             color: Color::linear_rgba(base, base, base * 1.05, 1.0),
@@ -1745,7 +2027,8 @@ fn spawn_satellites(
             base,
             phase: rng.gen_range(0.0..TAU),
         },
-    ));
+        ),
+    );
 }
 
 fn update_satellites(

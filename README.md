@@ -32,6 +32,16 @@ cargo run --release
 The app starts in borderless fullscreen on the primary monitor. Press **F11** to
 toggle windowed mode, or **Esc** to quit.
 
+For 1:1 pixel mapping at your monitor's resolution (larger fireworks and
+landscape detail on high-DPI displays):
+
+```bash
+FIREWORKS_NATIVE=1 cargo run --release
+```
+
+Native mode scales the 1280×800 design space to match your display and updates
+when you resize the window or toggle fullscreen.
+
 ## Controls
 
 | Input | Action |
