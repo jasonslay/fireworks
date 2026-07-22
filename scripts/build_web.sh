@@ -45,6 +45,7 @@ wasm-opt \
   --converge \
   --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
+  --enable-sign-ext \
   -o "$OUT/fireworks_bg.wasm" \
   "$OUT/fireworks_bg.wasm"
 AFTER=$(stat -c%s "$OUT/fireworks_bg.wasm")
