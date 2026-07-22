@@ -66,23 +66,26 @@ cd dist && python -m http.server 8080
 Then open http://127.0.0.1:8080. Controls match the desktop build except
 fullscreen (F11) is handled by the browser.
 
+**Play online:** [jtslay.com/fireworks/](https://jtslay.com/fireworks/)
+
 If you use [Trunk](https://trunkrs.dev/), `trunk serve --release` also works
 with the root `index.html` (pass `--no-default-features` via Trunk config).
 
-### Releases and GitHub Pages
+### Releases
 
 GitHub Actions runs [CI](.github/workflows/ci.yml) on pull requests and the
 [Release workflow](.github/workflows/release.yml) on every push to `main`. Each
-main push builds the Linux binary and web bundle, publishes a GitHub Release
-(`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz`), and deploys the
-web demo to GitHub Pages (typically at
-`https://jasonslay.github.io/fireworks/`).
+main push builds the Linux binary and web bundle, publishes a versioned GitHub
+Release (`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz`), and
+refreshes the rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
+release that [jtslay.com](https://jtslay.com/fireworks/) downloads for
+`/fireworks/`.
 
-Release tags are generated automatically from `Cargo.toml` plus the workflow
+Version tags are generated automatically from `Cargo.toml` plus the workflow
 run number (for example `v0.1.0.42`).
 
 You can also run the Release workflow manually from the **Actions** tab to
-rebuild and redeploy without pushing to `main`.
+rebuild without pushing to `main`.
 
 ## Controls
 

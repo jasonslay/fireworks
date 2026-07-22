@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: release
@@ -102,10 +100,44 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: web
-          path: |
-            fireworks-web.tar.gz
-            dist
+          path: fireworks-web.tar.gz
           if-no-files-found: error
+
+      # Rolling tag `web` — jtslay.com downloads this instead of compiling WASM.
+      - name: Publish web release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes="Web build from \`${GITHUB_SHA}\`.
+
+          Asset \`fireworks-web.tar.gz\` is consumed by [jtslay.com](https://jtslay.com/fireworks/)."
+          if gh release view web >/dev/null 2>&1; then
+            gh release upload web fireworks-web.tar.gz --clobber
+            gh release edit web --target "${GITHUB_SHA}" --notes "${notes}"
+          else
+            gh release create web fireworks-web.tar.gz \
+              --title "Web build" \
+              --notes "${notes}" \
+              --target "${GITHUB_SHA}" \
+              --latest=false
+          fi
+
+      # Optional: set JTSLAY_COM_DISPATCH_TOKEN (PAT with repo scope on jasonslay/jtslay.com)
+      # so fireworks pushes also redeploy https://jtslay.com/fireworks/
+      - name: Trigger jtslay.com redeploy
+        env:
+          DISPATCH_TOKEN: ${{ secrets.JTSLAY_COM_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${DISPATCH_TOKEN}" ]; then
+            echo "JTSLAY_COM_DISPATCH_TOKEN not set; skipping jtslay.com redeploy"
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/jasonslay/jtslay.com/dispatches \
+            -d "{\"event_type\":\"fireworks-updated\",\"client_payload\":{\"sha\":\"${GITHUB_SHA}\"}}"
 
   release:
     runs-on: ubuntu-latest
@@ -135,22 +167,3 @@ jobs:
             artifacts/fireworks-web.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  deploy-pages:
-    runs-on: ubuntu-latest
-    needs: build-web
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: web
-          path: web-artifact
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web-artifact/dist
-
-      - uses: actions/deploy-pages@v4
-        id: deployment
