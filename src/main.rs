@@ -16,21 +16,21 @@ use bevy::{
     render::camera::ScalingMode,
     render::mesh::{Indices, PrimitiveTopology},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    render::view::screenshot::{save_to_disk, Screenshot},
+    render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured},
     window::{MonitorSelection, PrimaryWindow, WindowMode},
 };
-use rand::{rngs::ThreadRng, thread_rng, Rng};
+use rand::{rngs::ThreadRng, thread_rng, Rng, SeedableRng};
 use std::f32::consts::TAU;
+use std::path::PathBuf;
+use std::process;
 use std::time::Duration;
 
 const GRAVITY: f32 = -240.0;
 const GROUND_Y: f32 = -370.0;
 
 fn main() {
-    // Debug helper: FIREWORKS_SHOT=out.png runs windowed, saves a screenshot
-    // a few seconds in, then exits.
-    let shot: Option<String> = std::env::var("FIREWORKS_SHOT").ok();
-    let mode = if shot.is_some() {
+    let screenshot = screenshot_path();
+    let mode = if screenshot.is_some() {
         WindowMode::Windowed
     } else {
         WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
@@ -58,7 +58,7 @@ fn main() {
         .insert_resource(SatelliteSpawner {
             timer: Timer::from_seconds(6.0, TimerMode::Once),
         })
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, apply_scene).chain())
         .add_systems(
             Update,
             (
@@ -76,37 +76,120 @@ fn main() {
             ),
         );
 
-    if let Some(path) = shot {
-        app.insert_resource(ShotConfig {
-            path,
-            taken: false,
-        })
-        .add_systems(Update, debug_screenshot);
-    }
+    configure_screenshot(&mut app, screenshot);
 
     app.run();
 }
 
-#[derive(Resource)]
-struct ShotConfig {
-    path: String,
-    taken: bool,
+fn screenshot_path() -> Option<String> {
+    std::env::var("FIREWORKS_SCREENSHOT")
+        .ok()
+        .or_else(|| std::env::var("FIREWORKS_SHOT").ok())
 }
 
-fn debug_screenshot(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut cfg: ResMut<ShotConfig>,
-    mut exit: EventWriter<AppExit>,
-) {
-    if !cfg.taken && time.elapsed_secs() > 3.5 {
-        cfg.taken = true;
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(cfg.path.clone()));
+#[derive(Resource)]
+struct ScreenshotJob {
+    path: PathBuf,
+    frame_target: u32,
+    frame: u32,
+    triggered: bool,
+}
+
+fn configure_screenshot(app: &mut App, path: Option<String>) {
+    let Some(path) = path else {
+        return;
+    };
+
+    let frame_target = std::env::var("FIREWORKS_SCREENSHOT_FRAME")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(120);
+
+    app.insert_resource(ScreenshotJob {
+        path: PathBuf::from(path),
+        frame_target,
+        frame: 0,
+        triggered: false,
+    })
+    .add_systems(Update, capture_screenshot);
+}
+
+fn capture_screenshot(mut commands: Commands, mut job: ResMut<ScreenshotJob>) {
+    job.frame += 1;
+    if job.triggered || job.frame < job.frame_target {
+        return;
     }
-    if cfg.taken && time.elapsed_secs() > 4.5 {
-        exit.write(AppExit::Success);
+
+    job.triggered = true;
+    let path = job.path.to_string_lossy().into_owned();
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path))
+        .observe(|_: Trigger<ScreenshotCaptured>| process::exit(0));
+}
+
+/// Deterministic poses for README screenshots (`FIREWORKS_SCENE`).
+fn apply_scene(
+    mut commands: Commands,
+    tex: Res<ParticleTexture>,
+    mut launcher: ResMut<Launcher>,
+    mut wind: ResMut<Wind>,
+    mut spawner: ResMut<SatelliteSpawner>,
+) {
+    if screenshot_path().is_none() && std::env::var("FIREWORKS_SCENE").is_err() {
+        return;
+    }
+
+    launcher.auto = false;
+    wind.current = 0.0;
+    wind.target = 0.0;
+    wind.retarget = 999.0;
+    spawner.timer = Timer::from_seconds(9999.0, TimerMode::Once);
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+    match std::env::var("FIREWORKS_SCENE").as_deref() {
+        Ok("night") => {
+            commands.spawn((
+                Sprite {
+                    image: tex.0.clone(),
+                    color: Color::linear_rgba(0.14, 0.14, 0.15, 1.0),
+                    custom_size: Some(Vec2::splat(4.5)),
+                    ..default()
+                },
+                Transform::from_xyz(-120.0, 560.0, 0.5),
+                Satellite {
+                    vel: Vec2::new(42.0, 1.5),
+                    base: 0.16,
+                    phase: 1.2,
+                },
+            ));
+        }
+        Ok("burst") => {
+            spawn_burst(
+                &mut commands,
+                &tex.0,
+                &mut rng,
+                Vec2::new(60.0, 230.0),
+                BurstKind::Chrysanthemum,
+                (COLORS[0], COLORS[2]),
+            );
+        }
+        Ok("finale") => {
+            let bursts = [
+                (Vec2::new(-280.0, 280.0), BurstKind::Peony, (COLORS[0], COLORS[0])),
+                (Vec2::new(120.0, 340.0), BurstKind::Chrysanthemum, (COLORS[3], COLORS[3])),
+                (Vec2::new(-60.0, 190.0), BurstKind::Willow, (COLORS[2], COLORS[2])),
+                (Vec2::new(320.0, 250.0), BurstKind::Palm, (COLORS[4], COLORS[4])),
+                (Vec2::new(-420.0, 210.0), BurstKind::Ring, (COLORS[5], COLORS[5])),
+                (Vec2::new(0.0, 300.0), BurstKind::Crossette, (COLORS[1], COLORS[1])),
+                (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
+            ];
+            for (pos, kind, palette) in bursts {
+                spawn_burst(&mut commands, &tex.0, &mut rng, pos, kind, palette);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -975,7 +1058,7 @@ fn update_shells(
 /// Uniform direction on a 3D sphere projected to the screen plane.
 /// The projected length falls off toward the silhouette edge, giving the
 /// characteristic dense rim of a real shell break.
-fn shell_dir(rng: &mut ThreadRng) -> Vec2 {
+fn shell_dir(rng: &mut impl Rng) -> Vec2 {
     let w: f32 = rng.gen_range(-1.0..1.0);
     let a: f32 = rng.gen_range(0.0..TAU);
     Vec2::from_angle(a) * (1.0 - w * w).sqrt()
@@ -1022,7 +1105,7 @@ fn spawn_flash(
 fn spawn_burst(
     commands: &mut Commands,
     tex: &Handle<Image>,
-    rng: &mut ThreadRng,
+    rng: &mut impl Rng,
     pos: Vec2,
     kind: BurstKind,
     pal: (Vec3, Vec3),

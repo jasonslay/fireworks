@@ -2,10 +2,18 @@
 
 A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
 
+![Finale over the Front Range](docs/screenshots/finale.png)
+
 The scene is a moonlit night over the Front Range west of Loveland, Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.
+
+## Screenshots
+
+| Moonlit night | Chrysanthemum burst | Finale salvo |
+|---------------|---------------------|--------------|
+| ![Moonlit night sky over the Front Range](docs/screenshots/night.png) | ![Red chrysanthemum shell mid-burst](docs/screenshots/burst.png) | ![Multiple shell types bursting at once](docs/screenshots/finale.png) |
 
 ## Requirements
 
@@ -51,13 +59,21 @@ horizon rather than stretching the composition.
 - **Landscape** – layered mountain silhouettes with moonlit snow, plus
   foreground hills whose mottled surface is relit by each burst.
 
-## Screenshot helper
+## Development
 
-For headless captures (e.g. CI or thumbnails), set `FIREWORKS_SHOT` to an output
-path. The app runs windowed, saves a screenshot after a few seconds, then exits:
+### Regenerating screenshots
 
 ```bash
-FIREWORKS_SHOT=shot.png cargo run --release
+./scripts/capture_screenshots.sh
+```
+
+This uses the built-in screenshot helper (`FIREWORKS_SCREENSHOT`, `FIREWORKS_SCENE`)
+to capture deterministic poses into `docs/screenshots/`.
+
+Ad-hoc captures are also supported:
+
+```bash
+FIREWORKS_SCREENSHOT=shot.png cargo run --release
 ```
 
 ## License
