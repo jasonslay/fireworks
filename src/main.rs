@@ -30,7 +30,8 @@ const GROUND_Y: f32 = -370.0;
 
 fn main() {
     let screenshot = screenshot_path();
-    let mode = if screenshot.is_some() {
+    let frame_dir = frame_dir();
+    let mode = if screenshot.is_some() || frame_dir.is_some() {
         WindowMode::Windowed
     } else {
         WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
@@ -77,14 +78,25 @@ fn main() {
         );
 
     configure_screenshot(&mut app, screenshot);
+    configure_frame_capture(&mut app, frame_dir);
 
     app.run();
+}
+
+fn capture_mode() -> bool {
+    screenshot_path().is_some()
+        || frame_dir().is_some()
+        || std::env::var("FIREWORKS_SCENE").is_ok()
 }
 
 fn screenshot_path() -> Option<String> {
     std::env::var("FIREWORKS_SCREENSHOT")
         .ok()
         .or_else(|| std::env::var("FIREWORKS_SHOT").ok())
+}
+
+fn frame_dir() -> Option<PathBuf> {
+    std::env::var("FIREWORKS_FRAME_DIR").ok().map(PathBuf::from)
 }
 
 #[derive(Resource)]
@@ -128,6 +140,93 @@ fn capture_screenshot(mut commands: Commands, mut job: ResMut<ScreenshotJob>) {
         .observe(|_: Trigger<ScreenshotCaptured>| process::exit(0));
 }
 
+#[derive(Event)]
+struct FrameSaved;
+
+#[derive(Resource)]
+struct FrameCaptureJob {
+    dir: PathBuf,
+    sim_frame: u32,
+    end_frame: u32,
+    step: u32,
+    index: u32,
+    waiting: bool,
+    finished: bool,
+}
+
+fn configure_frame_capture(app: &mut App, dir: Option<PathBuf>) {
+    let Some(dir) = dir else {
+        return;
+    };
+
+    let end_frame = std::env::var("FIREWORKS_FRAME_END")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(180);
+    let step = std::env::var("FIREWORKS_FRAME_STEP")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2)
+        .max(1);
+
+    std::fs::create_dir_all(&dir).expect("FIREWORKS_FRAME_DIR must be creatable");
+
+    app.insert_resource(FrameCaptureJob {
+        dir,
+        sim_frame: 0,
+        end_frame,
+        step,
+        index: 0,
+        waiting: false,
+        finished: false,
+    })
+    .add_event::<FrameSaved>()
+    .add_systems(Update, (capture_frame_sequence, finish_frame_capture).chain());
+}
+
+fn capture_frame_sequence(mut commands: Commands, mut job: ResMut<FrameCaptureJob>) {
+    if job.finished || job.waiting {
+        return;
+    }
+
+    job.sim_frame += 1;
+    if job.sim_frame > job.end_frame {
+        job.finished = true;
+        return;
+    }
+    if job.sim_frame % job.step != 0 {
+        return;
+    }
+
+    job.waiting = true;
+    job.index += 1;
+    let path = job
+        .dir
+        .join(format!("frame_{:04}.png", job.index))
+        .to_string_lossy()
+        .into_owned();
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path))
+        .observe(
+            |_: Trigger<ScreenshotCaptured>, mut writer: EventWriter<FrameSaved>| {
+                writer.write(FrameSaved);
+            },
+        );
+}
+
+fn finish_frame_capture(
+    mut job: ResMut<FrameCaptureJob>,
+    mut saved: EventReader<FrameSaved>,
+) {
+    if saved.read().next().is_some() {
+        job.waiting = false;
+    }
+    if job.finished && !job.waiting {
+        process::exit(0);
+    }
+}
+
 /// Deterministic poses for README screenshots (`FIREWORKS_SCENE`).
 fn apply_scene(
     mut commands: Commands,
@@ -136,7 +235,7 @@ fn apply_scene(
     mut wind: ResMut<Wind>,
     mut spawner: ResMut<SatelliteSpawner>,
 ) {
-    if screenshot_path().is_none() && std::env::var("FIREWORKS_SCENE").is_err() {
+    if !capture_mode() {
         return;
     }
 

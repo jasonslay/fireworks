@@ -8,19 +8,42 @@ cargo build --release
 
 BIN=./target/release/fireworks
 
-FIREWORKS_SCENE=night \
-FIREWORKS_SCREENSHOT=docs/screenshots/night.png \
-FIREWORKS_SCREENSHOT_FRAME=90 \
-"$BIN"
+capture_png() {
+  local scene=$1
+  local out=$2
+  local frame=$3
+  FIREWORKS_SCENE="$scene" \
+  FIREWORKS_SCREENSHOT="$out" \
+  FIREWORKS_SCREENSHOT_FRAME="$frame" \
+  "$BIN"
+}
 
-FIREWORKS_SCENE=burst \
-FIREWORKS_SCREENSHOT=docs/screenshots/burst.png \
-FIREWORKS_SCREENSHOT_FRAME=105 \
-"$BIN"
+capture_gif() {
+  local scene=$1
+  local out=$2
+  local end=$3
+  local tmp
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' RETURN
 
-FIREWORKS_SCENE=finale \
-FIREWORKS_SCREENSHOT=docs/screenshots/finale.png \
-FIREWORKS_SCREENSHOT_FRAME=120 \
-"$BIN"
+  FIREWORKS_SCENE="$scene" \
+  FIREWORKS_FRAME_DIR="$tmp" \
+  FIREWORKS_FRAME_END="$end" \
+  FIREWORKS_FRAME_STEP=3 \
+  "$BIN"
+
+  ffmpeg -y -loglevel error \
+    -framerate 15 -i "$tmp/frame_%04d.png" \
+    -vf "fps=12,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer" \
+    -loop 0 "$out"
+}
+
+# Still PNG for the calm night-sky hero thumbnail in the table.
+capture_png night docs/screenshots/night.png 90
+
+# Animated GIFs for motion-heavy scenes (sim frames are 60 Hz ticks, step 3 ≈ 20 Hz capture).
+capture_gif burst docs/screenshots/burst.gif 120
+capture_gif finale docs/screenshots/finale.gif 165
 
 echo "Screenshots written to docs/screenshots/"
+echo "Note: GIF capture requires ffmpeg."

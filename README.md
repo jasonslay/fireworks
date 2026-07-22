@@ -2,7 +2,7 @@
 
 A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
 
-![Finale over the Front Range](docs/screenshots/finale.png)
+![Finale over the Front Range](docs/screenshots/finale.gif)
 
 The scene is a moonlit night over the Front Range west of Loveland, Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
@@ -13,7 +13,7 @@ ridgeline; rising tails and falling embers appear and disappear around it.
 
 | Moonlit night | Chrysanthemum burst | Finale salvo |
 |---------------|---------------------|--------------|
-| ![Moonlit night sky over the Front Range](docs/screenshots/night.png) | ![Red chrysanthemum shell mid-burst](docs/screenshots/burst.png) | ![Multiple shell types bursting at once](docs/screenshots/finale.png) |
+| ![Moonlit night sky over the Front Range](docs/screenshots/night.png) | ![Red chrysanthemum shell bursting](docs/screenshots/burst.gif) | ![Multiple shell types bursting at once](docs/screenshots/finale.gif) |
 
 ## Requirements
 
@@ -67,10 +67,11 @@ horizon rather than stretching the composition.
 ./scripts/capture_screenshots.sh
 ```
 
-This uses the built-in screenshot helper (`FIREWORKS_SCREENSHOT`, `FIREWORKS_SCENE`)
-to capture deterministic poses into `docs/screenshots/`.
+Still frames use `FIREWORKS_SCREENSHOT` and `FIREWORKS_SCENE`. GIFs capture a
+frame sequence via `FIREWORKS_FRAME_DIR` (with `FIREWORKS_FRAME_END` and
+`FIREWORKS_FRAME_STEP`), then assemble with [ffmpeg](https://ffmpeg.org/).
 
-Ad-hoc captures are also supported:
+Ad-hoc still capture:
 
 ```bash
 FIREWORKS_SCREENSHOT=shot.png cargo run --release
