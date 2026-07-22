@@ -7,15 +7,23 @@ mkdir -p docs/screenshots
 cargo build --release
 
 BIN=./target/release/fireworks
+CAPTURE_WIDTH=1280
 
 capture_png() {
   local scene=$1
   local out=$2
   local frame=$3
+  local tmp
+  tmp=$(mktemp --suffix=.png)
+  trap 'rm -f "$tmp"' RETURN
+
   FIREWORKS_SCENE="$scene" \
-  FIREWORKS_SCREENSHOT="$out" \
+  FIREWORKS_SCREENSHOT="$tmp" \
   FIREWORKS_SCREENSHOT_FRAME="$frame" \
   "$BIN"
+
+  ffmpeg -y -loglevel error -i "$tmp" \
+    -vf "scale=${CAPTURE_WIDTH}:-1:flags=lanczos" "$out"
 }
 
 capture_gif() {
@@ -34,7 +42,7 @@ capture_gif() {
 
   ffmpeg -y -loglevel error \
     -framerate 15 -i "$tmp/frame_%04d.png" \
-    -vf "fps=12,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer" \
+    -vf "fps=12,scale=${CAPTURE_WIDTH}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer" \
     -loop 0 "$out"
 }
 
