@@ -3,21 +3,13 @@
 A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
 
 <p align="center">
-  <img src="docs/screenshots/finale.gif" alt="Finale over the Front Range" width="960" />
+  <img src="docs/screenshots/demo.gif" alt="Fireworks finale over the Front Range" width="1280" />
 </p>
 
 The scene is a moonlit night over the Front Range west of Loveland, Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/screenshots/night.png" alt="Moonlit night sky over the Front Range" width="310" />
-  <img src="docs/screenshots/burst.png" alt="Red chrysanthemum shell bursting" width="310" />
-  <img src="docs/screenshots/finale.png" alt="Multiple shell types bursting at once" width="310" />
-</p>
 
 ## Requirements
 
@@ -75,21 +67,15 @@ horizon rather than stretching the composition.
 
 ## Development
 
-### Regenerating screenshots
+### Regenerating the README demo GIF
 
 ```bash
 ./scripts/capture_screenshots.sh
 ```
 
-Still frames use `FIREWORKS_SCREENSHOT` and `FIREWORKS_SCENE`. GIFs capture a
-frame sequence via `FIREWORKS_FRAME_DIR` (with `FIREWORKS_FRAME_END` and
-`FIREWORKS_FRAME_STEP`), then assemble with [ffmpeg](https://ffmpeg.org/).
-
-Ad-hoc still capture:
-
-```bash
-FIREWORKS_SCREENSHOT=shot.png cargo run --release
-```
+Requires [ffmpeg](https://ffmpeg.org/). The script records auto-launch gameplay via
+`FIREWORKS_FRAME_DIR`, then assembles a 1280×800 GIF at 24 fps. Named scene
+presets (`FIREWORKS_SCENE=night|burst|finale`) remain available for stills.
 
 ## License
 

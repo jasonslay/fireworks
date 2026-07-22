@@ -348,7 +348,7 @@ fn finish_frame_capture(
     }
 }
 
-/// Deterministic poses for README screenshots (`FIREWORKS_SCENE`).
+/// Deterministic poses for README captures (`FIREWORKS_SCENE`).
 fn apply_scene(
     mut commands: Commands,
     tex: Res<ParticleTexture>,
@@ -357,9 +357,9 @@ fn apply_scene(
     mut wind: ResMut<Wind>,
     mut spawner: ResMut<SatelliteSpawner>,
 ) {
-    if !capture_mode() {
+    let Ok(scene_name) = std::env::var("FIREWORKS_SCENE") else {
         return;
-    }
+    };
 
     launcher.auto = false;
     wind.current = 0.0;
@@ -369,8 +369,8 @@ fn apply_scene(
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-    match std::env::var("FIREWORKS_SCENE").as_deref() {
-        Ok("night") => {
+    match scene_name.as_str() {
+        "night" => {
             spawn_in_scene(
                 &mut commands,
                 scene.as_deref(),
@@ -390,7 +390,7 @@ fn apply_scene(
                 ),
             );
         }
-        Ok("burst") => {
+        "burst" => {
             spawn_burst(
                 &mut commands,
                 scene.as_deref(),
@@ -401,7 +401,7 @@ fn apply_scene(
                 (COLORS[0], COLORS[2]),
             );
         }
-        Ok("finale") => {
+        "finale" => {
             let bursts = [
                 (Vec2::new(-280.0, 280.0), BurstKind::Peony, (COLORS[0], COLORS[0])),
                 (Vec2::new(120.0, 340.0), BurstKind::Chrysanthemum, (COLORS[3], COLORS[3])),
