@@ -19,12 +19,16 @@ use bevy::{
     render::camera::ScalingMode,
     render::mesh::{Indices, PrimitiveTopology},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured},
-    window::{MonitorSelection, PrimaryWindow, WindowMode},
+    window::{PrimaryWindow, WindowMode},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::window::MonitorSelection;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
 use rand::{rngs::ThreadRng, thread_rng, Rng, SeedableRng};
 use std::f32::consts::TAU;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process;
 use std::time::Duration;
 
@@ -35,22 +39,20 @@ const DESIGN_HEIGHT: f32 = 800.0;
 const DESIGN_CAMERA_Y: f32 = -400.0;
 
 fn main() {
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     let screenshot = screenshot_path();
     let frame_dir = frame_dir();
     let mode = if screenshot.is_some() || frame_dir.is_some() {
         WindowMode::Windowed
     } else {
-        WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+        window_mode()
     };
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Fireworks".into(),
-                resolution: (1280.0, 800.0).into(),
-                mode,
-                ..default()
-            }),
+            primary_window: Some(primary_window(mode)),
             ..default()
         }))
         .insert_resource(Launcher {
@@ -92,29 +94,89 @@ fn main() {
     app.run();
 }
 
+fn window_mode() -> WindowMode {
+    #[cfg(target_arch = "wasm32")]
+    {
+        WindowMode::Windowed
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+    }
+}
+
+fn primary_window(mode: WindowMode) -> Window {
+    let mut window = Window {
+        title: "Fireworks".into(),
+        resolution: (DESIGN_WIDTH, DESIGN_HEIGHT).into(),
+        mode,
+        ..default()
+    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Match canvas backing-store size to the browser viewport; native-mode
+        // scaling (SceneRoot + ortho) keeps the 1280×800 design proportional.
+        window.fit_canvas_to_parent = true;
+        window.resizable = true;
+    }
+    window
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_mode() -> bool {
     screenshot_path().is_some()
         || frame_dir().is_some()
-        || std::env::var("FIREWORKS_SCENE").is_ok()
+        || scene_env().is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_env() -> Option<String> {
+    std::env::var("FIREWORKS_SCENE").ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn scene_env() -> Option<String> {
+    None
 }
 
 fn screenshot_path() -> Option<String> {
-    std::env::var("FIREWORKS_SCREENSHOT")
-        .ok()
-        .or_else(|| std::env::var("FIREWORKS_SHOT").ok())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("FIREWORKS_SCREENSHOT")
+            .ok()
+            .or_else(|| std::env::var("FIREWORKS_SHOT").ok())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }
 
 fn frame_dir() -> Option<PathBuf> {
-    std::env::var("FIREWORKS_FRAME_DIR").ok().map(PathBuf::from)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("FIREWORKS_FRAME_DIR").ok().map(PathBuf::from)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }
 
 fn native_mode_requested() -> bool {
-    if capture_mode() {
-        return false;
+    #[cfg(target_arch = "wasm32")]
+    {
+        true
     }
-    std::env::var("FIREWORKS_NATIVE")
-        .ok()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if capture_mode() {
+            return false;
+        }
+        std::env::var("FIREWORKS_NATIVE")
+            .ok()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    }
 }
 
 #[derive(Resource, Clone, Copy)]
@@ -220,6 +282,7 @@ fn sync_native_view(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 struct ScreenshotJob {
     path: PathBuf,
@@ -228,6 +291,7 @@ struct ScreenshotJob {
     triggered: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn configure_screenshot(app: &mut App, path: Option<String>) {
     let Some(path) = path else {
         return;
@@ -247,6 +311,10 @@ fn configure_screenshot(app: &mut App, path: Option<String>) {
     .add_systems(Update, capture_screenshot);
 }
 
+#[cfg(target_arch = "wasm32")]
+fn configure_screenshot(_app: &mut App, _path: Option<String>) {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_screenshot(mut commands: Commands, mut job: ResMut<ScreenshotJob>) {
     job.frame += 1;
     if job.triggered || job.frame < job.frame_target {
@@ -261,9 +329,11 @@ fn capture_screenshot(mut commands: Commands, mut job: ResMut<ScreenshotJob>) {
         .observe(|_: Trigger<ScreenshotCaptured>| process::exit(0));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Event)]
 struct FrameSaved;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 struct FrameCaptureJob {
     dir: PathBuf,
@@ -275,6 +345,7 @@ struct FrameCaptureJob {
     finished: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn configure_frame_capture(app: &mut App, dir: Option<PathBuf>) {
     let Some(dir) = dir else {
         return;
@@ -305,6 +376,10 @@ fn configure_frame_capture(app: &mut App, dir: Option<PathBuf>) {
     .add_systems(Update, (capture_frame_sequence, finish_frame_capture).chain());
 }
 
+#[cfg(target_arch = "wasm32")]
+fn configure_frame_capture(_app: &mut App, _dir: Option<PathBuf>) {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_frame_sequence(mut commands: Commands, mut job: ResMut<FrameCaptureJob>) {
     if job.finished || job.waiting {
         return;
@@ -336,6 +411,7 @@ fn capture_frame_sequence(mut commands: Commands, mut job: ResMut<FrameCaptureJo
         );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn finish_frame_capture(
     mut job: ResMut<FrameCaptureJob>,
     mut saved: EventReader<FrameSaved>,
@@ -357,7 +433,7 @@ fn apply_scene(
     mut wind: ResMut<Wind>,
     mut spawner: ResMut<SatelliteSpawner>,
 ) {
-    let Ok(scene_name) = std::env::var("FIREWORKS_SCENE") else {
+    let Some(scene_name) = scene_env() else {
         return;
     };
 
@@ -818,10 +894,14 @@ fn setup(
 
     if native.0 {
         info!(
-            "Native resolution mode (FIREWORKS_NATIVE=1). Controls: click = launch, Space = finale, A = auto-launch, F11 = fullscreen, Esc = quit"
+            "Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, Esc = quit"
         );
     } else {
         info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F11 = fullscreen, Esc = quit");
+    }
+    #[cfg(target_arch = "wasm32")]
+    if native.0 {
+        info!("Canvas scales with the browser window.");
     }
 }
 
@@ -1262,6 +1342,7 @@ fn handle_input(
         launcher.auto = !launcher.auto;
         info!("auto-launch: {}", launcher.auto);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if keys.just_pressed(KeyCode::F11) {
         if let Ok(mut window) = windows.single_mut() {
             window.mode = match window.mode {

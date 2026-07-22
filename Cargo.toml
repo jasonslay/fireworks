@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[features]
+default = ["native"]
+# Linux window backends (omit when building for wasm).
+native = ["bevy/x11", "bevy/wayland"]
+
 [dependencies]
 bevy = { version = "0.16", default-features = false, features = [
     "std",
@@ -17,14 +22,17 @@ bevy = { version = "0.16", default-features = false, features = [
     "bevy_window",
     "bevy_winit",
     "bevy_log",
-    "x11",
-    "wayland",
+    "web",
+    "webgl2",
     "png",
     "tonemapping_luts",
     "ktx2",
     "zstd",
 ] }
 rand = "0.8"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
 
 # Fast runtime even in dev builds (bevy is unusably slow unoptimized)
 [profile.dev]
@@ -35,3 +43,11 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

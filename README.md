@@ -34,6 +34,63 @@ FIREWORKS_NATIVE=1 cargo run --release
 Native mode scales the 1280×800 design space to match your display and updates
 when you resize the window or toggle fullscreen.
 
+## Web (WASM)
+
+Build a WebAssembly bundle for embedding in a webpage:
+
+```bash
+./scripts/build_web.sh
+```
+
+Requires [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) and
+[Binaryen](https://github.com/WebAssembly/binaryen) (`wasm-opt`):
+
+```bash
+cargo install wasm-bindgen-cli
+rustup target add wasm32-unknown-unknown   # one-time
+pacman -S binaryen                         # Arch/CachyOS; or your OS package
+```
+
+The script builds with a size-tuned `wasm-release` profile (LTO, `opt-level = z`,
+`panic = abort`) and runs `wasm-opt -Oz` with debug/producer stripping. The
+result is typically ~9MB WASM (down from ~32MB unoptimized). Serve with gzip or
+brotli on your web server to shrink the transfer further.
+
+Output lands in `dist/` (`index.html`, `fireworks.js`, `fireworks_bg.wasm`).
+Serve locally to try it:
+
+```bash
+cd dist && python -m http.server 8080
+```
+
+Then open http://127.0.0.1:8080. Controls match the desktop build except
+fullscreen (F11) is handled by the browser.
+
+If you use [Trunk](https://trunkrs.dev/), `trunk serve --release` also works
+with the root `index.html` (pass `--no-default-features` via Trunk config).
+
+### Releases and GitHub Pages
+
+GitHub Actions builds the Linux binary and web bundle on every push and pull
+request. To publish a release:
+
+1. In the repo on GitHub, go to **Settings → Pages** and set **Build and
+   deployment** source to **GitHub Actions**.
+2. Tag a release and push it:
+
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+The [Release workflow](.github/workflows/release.yml) uploads
+`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz` to GitHub Releases
+and deploys the web bundle to GitHub Pages (typically at
+`https://jasonslay.github.io/fireworks/`).
+
+You can also run the Release workflow manually from the **Actions** tab to
+redeploy the site without creating a new tag.
+
 ## Controls
 
 | Input | Action |

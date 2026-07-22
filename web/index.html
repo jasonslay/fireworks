@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fireworks</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000510;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      #loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        color: #c8d0e0;
+        font-family: system-ui, sans-serif;
+        background: #000510;
+        z-index: 1;
+      }
+
+      #loading.hidden {
+        display: none;
+      }
+
+      #hint {
+        opacity: 0.6;
+        font-size: 0.9rem;
+        max-width: 28rem;
+        text-align: center;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">
+      <p>Loading fireworks…</p>
+      <p id="hint">
+        First load may take a moment while the WebAssembly bundle downloads.
+      </p>
+    </div>
+    <script type="module">
+      import init from "./fireworks.js";
+
+      init().then(() => {
+        document.getElementById("loading")?.classList.add("hidden");
+      });
+    </script>
+  </body>
+</html>
