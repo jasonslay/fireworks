@@ -2,7 +2,9 @@
 
 A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
 
-![Finale over the Front Range](docs/screenshots/finale.gif)
+<p align="center">
+  <img src="docs/screenshots/finale.gif" alt="Finale over the Front Range" width="960" />
+</p>
 
 The scene is a moonlit night over the Front Range west of Loveland, Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
@@ -11,9 +13,11 @@ ridgeline; rising tails and falling embers appear and disappear around it.
 
 ## Screenshots
 
-| Moonlit night | Chrysanthemum burst | Finale salvo |
-|---------------|---------------------|--------------|
-| ![Moonlit night sky over the Front Range](docs/screenshots/night.png) | ![Red chrysanthemum shell bursting](docs/screenshots/burst.gif) | ![Multiple shell types bursting at once](docs/screenshots/finale.gif) |
+<p align="center">
+  <img src="docs/screenshots/night.png" alt="Moonlit night sky over the Front Range" width="310" />
+  <img src="docs/screenshots/burst.png" alt="Red chrysanthemum shell bursting" width="310" />
+  <img src="docs/screenshots/finale.png" alt="Multiple shell types bursting at once" width="310" />
+</p>
 
 ## Requirements
 

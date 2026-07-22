@@ -15,7 +15,6 @@ capture_png() {
   local frame=$3
   local tmp
   tmp=$(mktemp --suffix=.png)
-  trap 'rm -f "$tmp"' RETURN
 
   FIREWORKS_SCENE="$scene" \
   FIREWORKS_SCREENSHOT="$tmp" \
@@ -24,6 +23,7 @@ capture_png() {
 
   ffmpeg -y -loglevel error -i "$tmp" \
     -vf "scale=${CAPTURE_WIDTH}:800:flags=lanczos" "$out"
+  rm -f "$tmp"
 }
 
 capture_gif() {
@@ -47,10 +47,12 @@ capture_gif() {
     -loop 0 "$out"
 }
 
-# Still PNG for the calm night-sky hero thumbnail in the table.
+# Still PNGs for the README row (GIFs ignore GitHub table sizing).
 capture_png night docs/screenshots/night.png 90
+capture_png burst docs/screenshots/burst.png 105
+capture_png finale docs/screenshots/finale.png 120
 
-# Animated GIFs for motion-heavy scenes (sim frames are 60 Hz ticks, step 3 ≈ 20 Hz capture).
+# Animated GIF for the README hero.
 capture_gif burst docs/screenshots/burst.gif 120
 capture_gif finale docs/screenshots/finale.gif 165
 
