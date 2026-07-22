@@ -15,6 +15,7 @@ use bevy::{
         bloom::Bloom,
         tonemapping::{DebandDither, Tonemapping},
     },
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     prelude::*,
     render::camera::ScalingMode,
     render::mesh::{Indices, PrimitiveTopology},
@@ -55,6 +56,7 @@ fn main() {
             primary_window: Some(primary_window(mode)),
             ..default()
         }))
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .insert_resource(Launcher {
             timer: Timer::from_seconds(0.8, TimerMode::Once),
             auto: true,
@@ -68,7 +70,9 @@ fn main() {
             timer: Timer::from_seconds(6.0, TimerMode::Once),
         })
         .insert_resource(NativeMode(native_mode_requested()))
-        .add_systems(Startup, (init_scene_root, setup, apply_scene).chain())
+        .insert_resource(ParticleBudget::default())
+        .insert_resource(FpsOverlay::default())
+        .add_systems(Startup, (init_scene_root, setup, setup_fps_hud, apply_scene).chain())
         .add_systems(PostStartup, sync_native_view)
         .add_systems(
             Update,
@@ -81,6 +85,7 @@ fn main() {
                 update_sparks,
                 update_trails,
                 update_flashes,
+                update_fps_hud,
                 twinkle_stars,
                 light_foreground_hills,
                 spawn_satellites,
@@ -432,6 +437,7 @@ fn apply_scene(
     mut launcher: ResMut<Launcher>,
     mut wind: ResMut<Wind>,
     mut spawner: ResMut<SatelliteSpawner>,
+    mut budget: ResMut<ParticleBudget>,
 ) {
     let Some(scene_name) = scene_env() else {
         return;
@@ -468,6 +474,7 @@ fn apply_scene(
         }
         "burst" => {
             spawn_burst(
+                &mut budget,
                 &mut commands,
                 scene.as_deref(),
                 &tex.0,
@@ -489,6 +496,7 @@ fn apply_scene(
             ];
             for (pos, kind, palette) in bursts {
                 spawn_burst(
+                    &mut budget,
                     &mut commands,
                     scene.as_deref(),
                     &tex.0,
@@ -514,6 +522,59 @@ struct ParticleTexture(Handle<Image>);
 struct Launcher {
     timer: Timer,
     auto: bool,
+}
+
+/// Tracks live particle counts so we can throttle spawning under heavy load.
+#[derive(Resource, Default)]
+struct ParticleBudget {
+    sparks: u32,
+    trails: u32,
+    flashes: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+const MAX_SPARKS: u32 = 1_600;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SPARKS: u32 = 2_800;
+
+#[cfg(target_arch = "wasm32")]
+const MAX_TRAILS: u32 = 900;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TRAILS: u32 = 1_400;
+
+const MAX_FLASHES: u32 = 24;
+
+impl ParticleBudget {
+    fn load(&self) -> f32 {
+        (self.sparks as f32 / MAX_SPARKS as f32)
+            .max(self.trails as f32 / MAX_TRAILS as f32)
+    }
+
+    fn burst_scale(&self) -> f32 {
+        match self.load() {
+            p if p >= 0.9 => 0.35,
+            p if p >= 0.7 => 0.55,
+            p if p >= 0.5 => 0.75,
+            p if p >= 0.3 => 0.9,
+            _ => 1.0,
+        }
+    }
+
+    fn can_spawn_spark(&self) -> bool {
+        self.sparks < MAX_SPARKS
+    }
+
+    fn can_spawn_trail(&self) -> bool {
+        self.trails < MAX_TRAILS
+    }
+
+    fn can_spawn_flash(&self) -> bool {
+        self.flashes < MAX_FLASHES
+    }
+}
+
+fn scale_burst_count(n: u32, budget: &ParticleBudget) -> u32 {
+    ((n as f32) * budget.burst_scale()).max(1.0) as u32
 }
 
 #[derive(Resource)]
@@ -639,6 +700,70 @@ struct FgHillsLighting {
     base_colors: Vec<[f32; 4]>,
     /// Per-column reflectance so firework light reveals surface texture.
     albedo: Vec<f32>,
+}
+
+#[derive(Resource, Default)]
+struct FpsOverlay {
+    visible: bool,
+}
+
+#[derive(Component)]
+struct FpsHudRoot;
+
+#[derive(Component)]
+struct FpsHudText;
+
+fn setup_fps_hud(mut commands: Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(8.0),
+                left: Val::Px(10.0),
+                ..default()
+            },
+            Visibility::Hidden,
+            FpsHudRoot,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("FPS: --"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.88, 0.91, 0.96, 0.88)),
+                FpsHudText,
+            ));
+        });
+}
+
+fn update_fps_hud(
+    overlay: Res<FpsOverlay>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut roots: Query<&mut Visibility, With<FpsHudRoot>>,
+    mut texts: Query<&mut Text, With<FpsHudText>>,
+) {
+    for mut visibility in &mut roots {
+        *visibility = if overlay.visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    if !overlay.visible {
+        return;
+    }
+
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|fps| fps.smoothed())
+        .unwrap_or(0.0);
+
+    for mut text in &mut texts {
+        *text = Text::new(format!("FPS: {fps:.0}"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -894,10 +1019,10 @@ fn setup(
 
     if native.0 {
         info!(
-            "Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, Esc = quit"
+            "Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F = FPS overlay, Esc = quit"
         );
     } else {
-        info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F11 = fullscreen, Esc = quit");
+        info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F = FPS overlay, F11 = fullscreen, Esc = quit");
     }
     #[cfg(target_arch = "wasm32")]
     if native.0 {
@@ -1326,6 +1451,7 @@ fn handle_input(
     tex: Res<ParticleTexture>,
     scene: Option<Res<SceneRoot>>,
     mut launcher: ResMut<Launcher>,
+    mut overlay: ResMut<FpsOverlay>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
@@ -1341,6 +1467,10 @@ fn handle_input(
     if keys.just_pressed(KeyCode::KeyA) {
         launcher.auto = !launcher.auto;
         info!("auto-launch: {}", launcher.auto);
+    }
+    if keys.just_pressed(KeyCode::KeyF) {
+        overlay.visible = !overlay.visible;
+        info!("FPS overlay: {}", if overlay.visible { "on" } else { "off" });
     }
     #[cfg(not(target_arch = "wasm32"))]
     if keys.just_pressed(KeyCode::F11) {
@@ -1409,6 +1539,7 @@ fn update_shells(
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
     scene: Option<Res<SceneRoot>>,
+    mut budget: ResMut<ParticleBudget>,
     mut shells: Query<(Entity, &mut Shell, &mut Transform)>,
 ) {
     let dt = time.delta_secs();
@@ -1422,27 +1553,32 @@ fn update_shells(
         tf.translation.x += shell.vel.x * dt;
         tf.translation.y += shell.vel.y * dt;
 
-        // Sparky propellant tail.
+        // Sparky propellant tail (one bit per frame max).
         shell.tail_timer -= dt;
-        while shell.tail_timer <= 0.0 {
+        if shell.tail_timer <= 0.0 {
             shell.tail_timer += 0.012;
-            let jitter = Vec2::new(rng.gen_range(-2.5..2.5), rng.gen_range(-2.5..2.5));
-            let pos = tf.translation.truncate() + jitter;
-            spawn_trail_bit(
-                &mut commands,
-                scene.as_deref(),
-                &tex.0,
-                pos,
-                -shell.vel * 0.08 + Vec2::new(rng.gen_range(-14.0..14.0), rng.gen_range(-20.0..6.0)),
-                Vec3::new(1.0, 0.55, 0.15),
-                rng.gen_range(0.18..0.4),
-                rng.gen_range(1.6..2.6),
-            );
+            if budget.can_spawn_trail() {
+                let jitter = Vec2::new(rng.gen_range(-2.5..2.5), rng.gen_range(-2.5..2.5));
+                let pos = tf.translation.truncate() + jitter;
+                spawn_trail_bit(
+                    &mut budget,
+                    &mut commands,
+                    scene.as_deref(),
+                    &tex.0,
+                    pos,
+                    -shell.vel * 0.08
+                        + Vec2::new(rng.gen_range(-14.0..14.0), rng.gen_range(-20.0..6.0)),
+                    Vec3::new(1.0, 0.55, 0.15),
+                    rng.gen_range(0.18..0.4),
+                    rng.gen_range(1.6..2.6),
+                );
+            }
         }
 
         if shell.fuse <= 0.0 {
             let pos = tf.translation.truncate();
             spawn_burst(
+                &mut budget,
                 &mut commands,
                 scene.as_deref(),
                 &tex.0,
@@ -1470,12 +1606,17 @@ fn shell_dir(rng: &mut impl Rng) -> Vec2 {
 }
 
 fn spawn_spark(
+    budget: &mut ParticleBudget,
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     pos: Vec2,
     spark: Spark,
-) {
+) -> bool {
+    if !budget.can_spawn_spark() {
+        return false;
+    }
+    budget.sparks += 1;
     let quad = spark.size * 4.2;
     spawn_in_scene(
         commands,
@@ -1491,9 +1632,11 @@ fn spawn_spark(
         spark,
         ),
     );
+    true
 }
 
 fn spawn_flash(
+    budget: &mut ParticleBudget,
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
@@ -1501,7 +1644,11 @@ fn spawn_flash(
     size: f32,
     life: f32,
     color: Vec3,
-) {
+) -> bool {
+    if !budget.can_spawn_flash() {
+        return false;
+    }
+    budget.flashes += 1;
     spawn_in_scene(
         commands,
         scene,
@@ -1520,9 +1667,11 @@ fn spawn_flash(
         },
         ),
     );
+    true
 }
 
 fn spawn_burst(
+    budget: &mut ParticleBudget,
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
@@ -1534,6 +1683,7 @@ fn spawn_burst(
     // The initial detonation flash that briefly lights the sky.
     let flash_color = pal.0 * 0.4 + Vec3::splat(0.6);
     spawn_flash(
+        budget,
         commands,
         scene,
         tex,
@@ -1559,11 +1709,12 @@ fn spawn_burst(
 
     match kind {
         BurstKind::Peony => {
-            let n = rng.gen_range(170..250);
+            let n = scale_burst_count(rng.gen_range(170..250), budget);
             let speed = rng.gen_range(300.0..400.0);
             for _ in 0..n {
                 let life = rng.gen_range(1.3..1.8);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1581,10 +1732,11 @@ fn spawn_burst(
                 );
             }
             // Colored pistil (inner core).
-            let n_core = n / 3;
+            let n_core = scale_burst_count(n / 3, budget);
             for _ in 0..n_core {
                 let life = rng.gen_range(1.0..1.4);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1603,11 +1755,12 @@ fn spawn_burst(
             }
         }
         BurstKind::Chrysanthemum => {
-            let n = rng.gen_range(140..200);
+            let n = scale_burst_count(rng.gen_range(140..200), budget);
             let speed = rng.gen_range(290.0..380.0);
             for _ in 0..n {
                 let life = rng.gen_range(1.5..2.0);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1619,7 +1772,7 @@ fn spawn_burst(
                         color: pal.0,
                         drag: 1.8,
                         size: rng.gen_range(2.4..3.2),
-                        trail_interval: 0.024,
+                        trail_interval: 0.032,
                         trail_life: 0.42,
                         seed: rng.gen_range(0.0..1.0),
                         ..default()
@@ -1629,11 +1782,12 @@ fn spawn_burst(
         }
         BurstKind::Willow => {
             let gold = Vec3::new(1.0, 0.55, 0.14);
-            let n = rng.gen_range(70..110);
+            let n = scale_burst_count(rng.gen_range(70..110), budget);
             let speed = rng.gen_range(200.0..260.0);
             for _ in 0..n {
                 let life = rng.gen_range(2.6..3.5);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1646,7 +1800,7 @@ fn spawn_burst(
                         drag: 1.1,
                         gravity_mul: 0.5,
                         size: rng.gen_range(2.2..3.0),
-                        trail_interval: 0.03,
+                        trail_interval: 0.04,
                         trail_life: 0.9,
                         seed: rng.gen_range(0.0..1.0),
                         ..default()
@@ -1657,12 +1811,13 @@ fn spawn_burst(
         BurstKind::Palm => {
             let gold = Vec3::new(1.0, 0.5, 0.1);
             // A handful of thick rising "fronds" with heavy trails.
-            let n = rng.gen_range(9..14);
+            let n = scale_burst_count(rng.gen_range(9..14), budget);
             for _ in 0..n {
                 let mut dir = shell_dir(rng);
                 dir.y += 0.35; // palms bias upward
                 let life = rng.gen_range(1.4..1.9);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1675,7 +1830,7 @@ fn spawn_burst(
                         drag: 1.3,
                         gravity_mul: 0.6,
                         size: rng.gen_range(5.0..6.5),
-                        trail_interval: 0.012,
+                        trail_interval: 0.018,
                         trail_life: 0.6,
                         seed: rng.gen_range(0.0..1.0),
                         ..default()
@@ -1683,9 +1838,11 @@ fn spawn_burst(
                 );
             }
             // A small silver crackle crown at the center.
-            for _ in 0..40 {
+            let crown = scale_burst_count(40, budget);
+            for _ in 0..crown {
                 let life = rng.gen_range(0.4..0.9);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1704,7 +1861,7 @@ fn spawn_burst(
             }
         }
         BurstKind::Ring => {
-            let n = rng.gen_range(70..110);
+            let n = scale_burst_count(rng.gen_range(70..110), budget);
             let speed = rng.gen_range(300.0..360.0);
             let squash = rng.gen_range(0.35..1.0);
             let tilt = rng.gen_range(0.0..TAU);
@@ -1714,6 +1871,7 @@ fn spawn_burst(
                 let dir = Vec2::new(a.cos(), a.sin() * squash);
                 let life = rng.gen_range(1.2..1.5);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1732,11 +1890,12 @@ fn spawn_burst(
             }
         }
         BurstKind::Crossette => {
-            let n = rng.gen_range(18..30);
+            let n = scale_burst_count(rng.gen_range(18..30), budget);
             let speed = rng.gen_range(220.0..300.0);
             for _ in 0..n {
                 let life = rng.gen_range(1.6..2.1);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1748,7 +1907,7 @@ fn spawn_burst(
                         color: pal.0,
                         drag: 1.5,
                         size: rng.gen_range(4.0..5.0),
-                        trail_interval: 0.03,
+                        trail_interval: 0.04,
                         trail_life: 0.3,
                         split_at: rng.gen_range(0.4..0.52),
                         seed: rng.gen_range(0.0..1.0),
@@ -1758,7 +1917,7 @@ fn spawn_burst(
             }
         }
         BurstKind::Strobe => {
-            let n = rng.gen_range(90..130);
+            let n = scale_burst_count(rng.gen_range(90..130), budget);
             let speed = rng.gen_range(260.0..340.0);
             // Strobes are usually silver-white, occasionally tinted.
             let color = if rng.gen_bool(0.5) {
@@ -1769,6 +1928,7 @@ fn spawn_burst(
             for _ in 0..n {
                 let life = rng.gen_range(2.2..3.1);
                 spawn_spark(
+                    budget,
                     commands,
                     scene,
                     tex,
@@ -1802,6 +1962,7 @@ fn update_sparks(
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
     scene: Option<Res<SceneRoot>>,
+    mut budget: ResMut<ParticleBudget>,
     mut sparks: Query<(Entity, &mut Spark, &mut Transform, &mut Sprite)>,
 ) {
     let dt = time.delta_secs();
@@ -1811,13 +1972,14 @@ fn update_sparks(
     for (entity, mut spark, mut tf, mut sprite) in &mut sparks {
         spark.life -= dt;
         if spark.life <= 0.0 || tf.translation.y < GROUND_Y {
+            budget.sparks = budget.sparks.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
         }
 
-        // Physics.
-        let damp = (1.0 - spark.drag * dt).max(0.0);
-        spark.vel *= damp;
+        // Physics — exponential drag keeps motion consistent across frame times.
+        let drag = spark.drag;
+        spark.vel *= (-drag * dt).exp();
         let g = GRAVITY * spark.gravity_mul * dt;
         spark.vel.y += g;
         spark.vel.x += wind.current * dt;
@@ -1825,11 +1987,13 @@ fn update_sparks(
         tf.translation.y += spark.vel.y * dt;
 
         let age = 1.0 - spark.life / spark.max_life;
+        let speed = spark.vel.length();
 
         // Crossette break: the star pops into a small cross of fragments.
         if spark.split_at > 0.0 && age >= spark.split_at {
             let pos = tf.translation.truncate();
             spawn_flash(
+                &mut budget,
                 &mut commands,
                 scene.as_deref(),
                 &tex.0,
@@ -1843,6 +2007,7 @@ fn update_sparks(
                 let a = base_angle + i as f32 * TAU / 4.0;
                 let life = rng.gen_range(0.5..0.8);
                 spawn_spark(
+                    &mut budget,
                     &mut commands,
                     scene.as_deref(),
                     &tex.0,
@@ -1859,40 +2024,50 @@ fn update_sparks(
                     },
                 );
             }
+            budget.sparks = budget.sparks.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
         }
 
-        // Trails.
-        if spark.trail_interval > 0.0 {
+        // Trails — stop once the star dims; cap to one spawn per frame so hitches
+        // don't clump trail bits at a single point.
+        if spark.trail_interval > 0.0 && age < 0.58 {
             spark.trail_timer -= dt;
-            while spark.trail_timer <= 0.0 {
+            if spark.trail_timer <= 0.0 {
                 spark.trail_timer += spark.trail_interval;
-                let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
-                spawn_trail_bit(
-                    &mut commands,
-                    scene.as_deref(),
-                    &tex.0,
-                    tf.translation.truncate() + jitter,
-                    spark.vel * 0.06,
-                    spark.color,
-                    spark.trail_life * rng.gen_range(0.7..1.3),
-                    spark.size * 0.7,
-                );
+                if budget.can_spawn_trail() {
+                    let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
+                    spawn_trail_bit(
+                        &mut budget,
+                        &mut commands,
+                        scene.as_deref(),
+                        &tex.0,
+                        tf.translation.truncate() + jitter,
+                        spark.vel * 0.06,
+                        spark.color,
+                        spark.trail_life * rng.gen_range(0.7..1.3),
+                        spark.size * 0.7,
+                    );
+                }
             }
         }
 
         // Appearance.
-        let (rgb, alpha) = spark_color(&spark, age, now);
+        let (rgb, alpha) = spark_color(&spark, age, speed, now);
         sprite.color = Color::linear_rgba(rgb.x, rgb.y, rgb.z, alpha);
-        let scale = 0.55 + 0.45 * (1.0 - age);
+        // Hold size steady during the fade-out so sub-pixel shrink doesn't shimmer.
+        let scale = if age < 0.7 {
+            0.55 + 0.45 * (1.0 - age)
+        } else {
+            0.685
+        };
         tf.scale = Vec3::splat(scale);
     }
 }
 
 /// Color evolution of a burning star: white-hot flash at ignition, steady
 /// colored burn, then a dimming orange ember before extinction.
-fn spark_color(spark: &Spark, age: f32, now: f32) -> (Vec3, f32) {
+fn spark_color(spark: &Spark, age: f32, speed: f32, now: f32) -> (Vec3, f32) {
     let hot = (1.0 - age / 0.10).clamp(0.0, 1.0);
     let mut c = spark.color.lerp(Vec3::ONE, hot * 0.85);
 
@@ -1903,17 +2078,29 @@ fn spark_color(spark: &Spark, age: f32, now: f32) -> (Vec3, f32) {
     let mut i = 9.0 * (1.0 - age).powf(1.6) + 0.35;
     i *= 1.0 + hot * 5.0;
 
-    // Burn flicker.
-    let fl = (now * 37.0 + spark.seed * 100.0).sin() * (now * 23.0 + spark.seed * 57.0).sin();
-    i *= 0.82 + 0.18 * fl.abs();
+    // Burn flicker while the star is still bright; fade it out before the
+    // ember phase so low-intensity stars don't pop frame-to-frame.
+    let flicker = (now * 37.0 + spark.seed * 100.0).sin()
+        * (now * 23.0 + spark.seed * 57.0).sin();
+    let flicker_mix = (1.0 - age / 0.55).clamp(0.0, 1.0);
+    i *= 1.0 + flicker_mix * 0.18 * flicker.abs();
 
     if spark.strobe_hz > 0.0 {
         let phase = (now * spark.strobe_hz + spark.strobe_phase).fract();
-        i *= if phase < 0.42 { 1.8 } else { 0.02 };
+        let strobe_on = if phase < 0.42 { 1.8 } else { 0.02 };
+        // Ease strobes into a steady ember so late-life flashes don't read as stutter.
+        let strobe_mix = (1.0 - smoothstep(0.35, 0.75, age)).clamp(0.0, 1.0);
+        i *= 1.0 + strobe_mix * (strobe_on - 1.0);
     }
 
-    let alpha = 1.0 - ((age - 0.75) / 0.25).clamp(0.0, 1.0);
-    (c * i, alpha.powf(0.7))
+    // One envelope drives both alpha and HDR so bloom fades smoothly instead of
+    // dropping off a threshold while the sprite still moves sub-pixel distances.
+    let mut fade = 1.0 - smoothstep(0.62, 0.98, age);
+    // Nearly stopped embers crawl at sub-pixel speeds; fade them out faster.
+    let crawl = (1.0 - (speed / 18.0).clamp(0.0, 1.0)) * smoothstep(0.48, 0.78, age);
+    fade *= 1.0 - crawl * 0.55;
+
+    (c * i * fade, fade)
 }
 
 // ---------------------------------------------------------------------------
@@ -1921,6 +2108,7 @@ fn spark_color(spark: &Spark, age: f32, now: f32) -> (Vec3, f32) {
 // ---------------------------------------------------------------------------
 
 fn spawn_trail_bit(
+    budget: &mut ParticleBudget,
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
@@ -1929,7 +2117,11 @@ fn spawn_trail_bit(
     color: Vec3,
     life: f32,
     size: f32,
-) {
+) -> bool {
+    if !budget.can_spawn_trail() {
+        return false;
+    }
+    budget.trails += 1;
     spawn_in_scene(
         commands,
         scene,
@@ -1949,42 +2141,51 @@ fn spawn_trail_bit(
         },
         ),
     );
+    true
 }
 
 fn update_trails(
     mut commands: Commands,
     time: Res<Time>,
+    mut budget: ResMut<ParticleBudget>,
     mut trails: Query<(Entity, &mut TrailBit, &mut Transform, &mut Sprite)>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut bit, mut tf, mut sprite) in &mut trails {
         bit.life -= dt;
         if bit.life <= 0.0 || tf.translation.y < GROUND_Y {
+            budget.trails = budget.trails.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
         }
-        bit.vel *= (1.0 - 1.5 * dt).max(0.0);
+        bit.vel *= (-1.5 * dt).exp();
         bit.vel.y += GRAVITY * 0.18 * dt;
         tf.translation.x += bit.vel.x * dt;
         tf.translation.y += bit.vel.y * dt;
 
         let frac = bit.life / bit.max_life; // 1 -> 0
         let ember = bit.color.lerp(Vec3::new(1.0, 0.3, 0.05), 1.0 - frac);
-        let i = 2.6 * frac * frac;
-        sprite.color = Color::linear_rgba(ember.x * i, ember.y * i, ember.z * i, frac);
-        tf.scale = Vec3::splat(0.4 + 0.6 * frac);
+        // Couple intensity and alpha so trail embers don't pop in/out of bloom.
+        let fade = frac * smoothstep(0.0, 0.25, frac);
+        let i = 2.6 * fade;
+        sprite.color = Color::linear_rgba(ember.x * i, ember.y * i, ember.z * i, fade);
+        // Hold size during the fade-out — shrinking trail sprites shimmer when slow.
+        let scale = if frac > 0.35 { 0.4 + 0.6 * frac } else { 0.61 };
+        tf.scale = Vec3::splat(scale);
     }
 }
 
 fn update_flashes(
     mut commands: Commands,
     time: Res<Time>,
+    mut budget: ResMut<ParticleBudget>,
     mut flashes: Query<(Entity, &mut Flash, &mut Transform, &mut Sprite)>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut flash, mut tf, mut sprite) in &mut flashes {
         flash.life -= dt;
         if flash.life <= 0.0 {
+            budget.flashes = budget.flashes.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
         }
@@ -2007,8 +2208,10 @@ fn light_foreground_hills(
     mut meshes: ResMut<Assets<Mesh>>,
     mut lights: Query<(Entity, &mut BurstLight, &Transform)>,
     mut was_lit: Local<bool>,
+    mut frame: Local<u32>,
 ) {
     let dt = time.delta_secs();
+    *frame = frame.wrapping_add(1);
 
     let mut active: Vec<(Vec2, Vec3)> = Vec::new();
     for (entity, mut light, tf) in &mut lights {
@@ -2031,6 +2234,20 @@ fn light_foreground_hills(
         return;
     }
     *was_lit = !active.is_empty();
+
+    // Under heavy load, update hill lighting every other frame and keep only
+    // the brightest sources.
+    if active.len() > 6 && *frame % 2 == 1 {
+        return;
+    }
+    if active.len() > 12 {
+        active.select_nth_unstable_by(12, |a, b| {
+            let la = a.1.x + a.1.y + a.1.z;
+            let lb = b.1.x + b.1.y + b.1.z;
+            lb.partial_cmp(&la).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        active.truncate(12);
+    }
 
     let Some(mesh) = meshes.get_mut(&cfg.mesh) else {
         return;

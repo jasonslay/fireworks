@@ -98,6 +98,7 @@ redeploy the site without creating a new tag.
 | Left click | Launch a shell that bursts at the clicked point |
 | Space | Finale salvo (8 shells at once) |
 | A | Toggle automatic launching (on by default) |
+| F | Toggle FPS overlay (top-left corner) |
 | F11 | Toggle borderless fullscreen |
 | Esc | Quit |
 
