@@ -23,10 +23,16 @@ FIREWORKS_FRAME_END="$FRAME_END" \
 FIREWORKS_FRAME_STEP="$FRAME_STEP" \
 "$BIN"
 
-ffmpeg -y -loglevel error \
-  -framerate "$FPS" -i "$tmp/frame_%04d.png" \
-  -vf "scale=${CAPTURE_WIDTH}:${CAPTURE_HEIGHT}:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=full[p];[s1][p]paletteuse=dither=bayer:diff_mode=none" \
-  -gifflags -offsetting \
-  -loop 0 "$OUT"
+if command -v gifski >/dev/null 2>&1; then
+  gifski --output "$OUT" --fps "$FPS" --width "$CAPTURE_WIDTH" --height "$CAPTURE_HEIGHT" \
+    --quality 100 "$tmp"/frame_*.png
+else
+  echo "gifski not found; falling back to ffmpeg (install gifski for better quality)" >&2
+  ffmpeg -y -loglevel error \
+    -framerate "$FPS" -i "$tmp/frame_%04d.png" \
+    -vf "scale=${CAPTURE_WIDTH}:${CAPTURE_HEIGHT}:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
+    -gifflags -offsetting \
+    -loop 0 "$OUT"
+fi
 
 echo "Wrote ${OUT} (${CAPTURE_WIDTH}x${CAPTURE_HEIGHT}, ${FPS} fps)"
