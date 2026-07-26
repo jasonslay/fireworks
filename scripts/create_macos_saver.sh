@@ -89,8 +89,17 @@ codesign --force --deep --sign - --timestamp=none "$BUNDLE"
 ditto -c -k --keepParent "$BUNDLE" "$ZIP"
 
 ZIP_SIZE=$(wc -c < "$ZIP" | tr -d ' ')
-if (( ZIP_SIZE < BINARY_SIZE / 2 )); then
-  echo "error: screensaver zip is suspiciously small (${ZIP_SIZE} bytes; binary was ${BINARY_SIZE})" >&2
+# Catch the empty-plugin failure mode (~40KB). Mach-O compresses ~3-4x, so
+# comparing zip size to the uncompressed binary is not useful.
+if (( ZIP_SIZE < 1000000 )); then
+  echo "error: screensaver zip is suspiciously small (${ZIP_SIZE} bytes; engine was ${ENGINE_SIZE})" >&2
+  exit 1
+fi
+
+# Confirm the zipped bundle still carries the full engine.
+ZIP_ENGINE_SIZE=$(unzip -l "$ZIP" | awk '/Resources\/fireworks$/ { print $1; exit }')
+if [[ -z "${ZIP_ENGINE_SIZE}" ]] || (( ZIP_ENGINE_SIZE != BINARY_SIZE )); then
+  echo "error: zip is missing the full engine binary (found ${ZIP_ENGINE_SIZE:-0} bytes, expected ${BINARY_SIZE})" >&2
   exit 1
 fi
 
