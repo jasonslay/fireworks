@@ -40,7 +40,7 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Build macOS universal binary
         run: |
@@ -58,7 +58,7 @@ jobs:
           cp LICENSE release/macos/
           tar -czf fireworks-macos-universal.tar.gz -C release/macos .
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: macos
           path: fireworks-macos-universal.tar.gz
@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: web
           path: artifacts
@@ -114,7 +114,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./scripts/create_macos_saver.sh dist dist/screensaver
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: macos-saver
           path: dist/screensaver/fireworks-macos-screensaver.zip
@@ -130,7 +130,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install Linux build dependencies
         run: |
@@ -157,7 +157,7 @@ jobs:
           cp LICENSE release/linux/
           tar -czf fireworks-linux-x86_64.tar.gz -C release/linux .
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: linux
           path: fireworks-linux-x86_64.tar.gz
@@ -174,7 +174,7 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install web build tools
         run: |
@@ -188,7 +188,7 @@ jobs:
       - name: Package web bundle
         run: tar -czf fireworks-web.tar.gz -C dist .
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: web
           path: fireworks-web.tar.gz
@@ -236,28 +236,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: macos
           path: artifacts
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: macos-saver
           path: artifacts
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: linux
           path: artifacts
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: web
           path: artifacts
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: ${{ needs.prepare.outputs.tag }}
