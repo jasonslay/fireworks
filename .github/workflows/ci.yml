@@ -57,8 +57,15 @@ jobs:
             target/x86_64-apple-darwin/release/fireworks
           lipo -info fireworks-macos
 
-      - name: Build Fireworks.saver
-        run: ./scripts/create_macos_saver.sh fireworks-macos dist/screensaver
+      - name: Compile screensaver plugin
+        run: |
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          swiftc -sdk "$SDK" \
+            -framework ScreenSaver -framework AppKit -framework WebKit \
+            -emit-library -Xlinker -bundle -module-name Fireworks -O \
+            -o /tmp/Fireworks \
+            macos/screensaver/FireworksView.swift
+          lipo -info /tmp/Fireworks
 
   wasm:
     runs-on: ubuntu-latest

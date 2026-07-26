@@ -66,23 +66,53 @@ jobs:
 
   build-macos-saver:
     runs-on: macos-latest
-    needs: build-macos
+    needs: build-web
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
-          name: macos
+          name: web
           path: artifacts
 
-      - name: Extract macOS binary
+      - name: Extract web bundle
         run: |
-          mkdir -p release/macos
-          tar -xzf artifacts/fireworks-macos-universal.tar.gz -C release/macos
-          test -x release/macos/fireworks
+          mkdir -p dist
+          tar -xzf artifacts/fireworks-web.tar.gz -C dist
+          test -f dist/index.html
+          test -f dist/fireworks_bg.wasm
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "${MACOS_CERTIFICATE}" ]; then
+            echo "MACOS_CERTIFICATE not set; screensaver will be ad-hoc signed only"
+            exit 0
+          fi
+          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode >"$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: Build Fireworks.saver
-        run: ./scripts/create_macos_saver.sh release/macos/fireworks dist/screensaver
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./scripts/create_macos_saver.sh dist dist/screensaver
 
       - uses: actions/upload-artifact@v4
         with:

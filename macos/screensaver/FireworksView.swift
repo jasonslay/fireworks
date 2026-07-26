@@ -1,20 +1,20 @@
 import AppKit
 import ScreenSaver
+import WebKit
 import os.log
 
 private let log = OSLog(subsystem: "com.jasonslay.fireworks.screensaver", category: "main")
 
-/// Thin ScreenSaverView that launches the bundled Fireworks binary fullscreen.
+/// ScreenSaverView that hosts the Fireworks WebAssembly build in a WKWebView.
 ///
-/// Preview mode draws a static title instead of starting Bevy (too heavy for the
-/// System Settings thumbnail). Only the main display starts the engine so
-/// multi-monitor setups don't spawn duplicate processes.
+/// The legacyScreenSaver sandbox blocks launching the native binary as a child
+/// process, so the screensaver embeds the same web bundle used on jtslay.com.
 @objc(FireworksView)
 public final class FireworksView: ScreenSaverView {
     private static let newInstanceNotification =
         Notification.Name("com.jasonslay.fireworks.screensaver.NewInstance")
 
-    private var engine: Process?
+    private var webView: WKWebView?
     private var isPreviewMode = false
     private var lameDuck = false
 
@@ -45,7 +45,7 @@ public final class FireworksView: ScreenSaverView {
     }
 
     deinit {
-        stopEngine()
+        teardownWebView()
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)
     }
@@ -55,18 +55,17 @@ public final class FireworksView: ScreenSaverView {
     public override func startAnimation() {
         super.startAnimation()
         guard !lameDuck else { return }
+
+        // Preview thumbnail stays lightweight; full-screen loads the WASM app.
         guard !isPreviewMode else { return }
 
-        // One engine for the whole desktop; secondary displays stay black.
-        if let screen = window?.screen, let main = NSScreen.main, screen != main {
-            return
-        }
-
-        startEngine()
+        ensureFullSize()
+        installWebView()
+        webView?.frame = webViewTargetFrame()
     }
 
     public override func stopAnimation() {
-        stopEngine()
+        teardownWebView()
         super.stopAnimation()
     }
 
@@ -74,8 +73,7 @@ public final class FireworksView: ScreenSaverView {
         NSColor.black.setFill()
         bounds.fill()
 
-        // Preview thumbnail, or secondary displays / failed launch.
-        if engine == nil {
+        if webView == nil {
             let title = "Fireworks"
             let fontSize = max(12.0, min(bounds.width, bounds.height) * 0.12)
             let attrs: [NSAttributedString.Key: Any] = [
@@ -91,9 +89,29 @@ public final class FireworksView: ScreenSaverView {
     }
 
     public override func animateOneFrame() {
-        if engine == nil {
+        if webView == nil {
             setNeedsDisplay(bounds)
         }
+    }
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        webView?.frame = webViewTargetFrame()
+    }
+
+    public override func layout() {
+        super.layout()
+        webView?.frame = webViewTargetFrame()
+    }
+
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        webView?.frame = webViewTargetFrame()
+    }
+
+    public override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        webView?.frame = webViewTargetFrame()
     }
 
     @objc private func willStop(_ notification: Notification) {
@@ -103,72 +121,105 @@ public final class FireworksView: ScreenSaverView {
     @objc private func neuter(_ notification: Notification) {
         guard (notification.object as AnyObject?) !== self else { return }
         lameDuck = true
-        stopEngine()
+        teardownWebView()
         removeFromSuperview()
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)
     }
 
-    private func engineURL() -> URL? {
-        let bundle = Bundle(for: FireworksView.self)
-        // Engine is shipped as Contents/Resources/fireworks (not MacOS/) so its
-        // name cannot collide with the Fireworks plugin on case-insensitive APFS.
-        if let url = bundle.url(forResource: "fireworks", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: url.path) {
-            return url
+    private func ensureFullSize() {
+        if bounds.width > 1, bounds.height > 1 { return }
+        let target = NSScreen.main?.frame.size ?? NSSize(width: 1920, height: 1080)
+        setFrameSize(target)
+    }
+
+    /// Clamp against screen points — legacyScreenSaver can hand over backing pixels.
+    private func webViewTargetFrame() -> NSRect {
+        if isPreviewMode, bounds.width > 1, bounds.height > 1 {
+            return bounds
         }
-        let fallback = bundle.resourceURL?.appendingPathComponent("fireworks", isDirectory: false)
-        if let fallback, FileManager.default.isExecutableFile(atPath: fallback.path) {
-            return fallback
+        let screenSize = window?.screen?.frame.size
+            ?? NSScreen.main?.frame.size
+            ?? .zero
+        if screenSize.width > 1, screenSize.height > 1 {
+            if bounds.width > 1, bounds.height > 1 {
+                return NSRect(
+                    x: 0,
+                    y: 0,
+                    width: min(bounds.width, screenSize.width),
+                    height: min(bounds.height, screenSize.height)
+                )
+            }
+            return NSRect(origin: .zero, size: screenSize)
+        }
+        return bounds
+    }
+
+    private func webRootURL() -> URL? {
+        let bundle = Bundle(for: FireworksView.self)
+        if let index = bundle.url(forResource: "index", withExtension: "html", subdirectory: "web") {
+            return index.deletingLastPathComponent()
+        }
+        if let resources = bundle.resourceURL?.appendingPathComponent("web", isDirectory: true) {
+            let index = resources.appendingPathComponent("index.html")
+            if FileManager.default.fileExists(atPath: index.path) {
+                return resources
+            }
         }
         return nil
     }
 
-    private func startEngine() {
-        guard engine == nil else { return }
-        guard let url = engineURL() else {
-            os_log("fireworks binary missing from screensaver bundle", log: log, type: .error)
+    private func installWebView() {
+        guard webView == nil else { return }
+        guard let root = webRootURL() else {
+            os_log("web bundle missing from screensaver Resources/web", log: log, type: .error)
             return
         }
+        let index = root.appendingPathComponent("index.html")
 
-        let process = Process()
-        process.executableURL = url
-        var env = ProcessInfo.processInfo.environment
-        env["FIREWORKS_SCREENSAVER"] = "1"
-        env["FIREWORKS_NATIVE"] = "1"
-        process.environment = env
-        process.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.engine = nil
-                self?.setNeedsDisplay(self?.bounds ?? .zero)
-            }
-        }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
 
-        do {
-            try process.run()
-            engine = process
-            os_log("started fireworks engine pid=%d", log: log, type: .info, process.processIdentifier)
-        } catch {
-            os_log(
-                "failed to start fireworks: %{public}@",
-                log: log,
-                type: .error,
-                String(describing: error)
+        // Screen saver host reports document.visibilityState === "hidden", which
+        // pauses rAF / WebGL. Spoof visible so Bevy keeps rendering.
+        let visibilityOverride = """
+        try {
+          Object.defineProperty(Document.prototype, 'hidden', {
+            configurable: true, get: function() { return false; }
+          });
+          Object.defineProperty(Document.prototype, 'visibilityState', {
+            configurable: true, get: function() { return 'visible'; }
+          });
+          document.dispatchEvent(new Event('visibilitychange'));
+        } catch (e) {}
+        """
+        config.userContentController.addUserScript(
+            WKUserScript(
+                source: visibilityOverride,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
             )
+        )
+
+        let wv = WKWebView(frame: webViewTargetFrame(), configuration: config)
+        if #available(macOS 13.0, *) {
+            wv.underPageBackgroundColor = .black
         }
+        wv.setValue(false, forKey: "drawsBackground")
+        addSubview(wv)
+        webView = wv
+
+        wv.loadFileURL(index, allowingReadAccessTo: root)
+        os_log("loading fireworks web bundle from %{public}@", log: log, type: .info, root.path)
     }
 
-    private func stopEngine() {
-        guard let process = engine else { return }
-        engine = nil
-        if process.isRunning {
-            process.terminate()
-            let pid = process.processIdentifier
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
-                if kill(pid, 0) == 0 {
-                    kill(pid, SIGKILL)
-                }
-            }
-        }
+    private func teardownWebView() {
+        guard let wv = webView else { return }
+        wv.stopLoading()
+        wv.navigationDelegate = nil
+        wv.removeFromSuperview()
+        webView = nil
     }
 }
