@@ -23,7 +23,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/macos/screensaver"
 WEB_DIST="${1:?Usage: $0 <web-dist-dir> [output-dir]}"
+# Resolve paths up front — later we `cd` into a stage dir for zipping.
+if [[ "$WEB_DIST" != /* ]]; then
+  WEB_DIST="$(cd "$WEB_DIST" && pwd)"
+fi
 OUT_DIR="${2:-$ROOT/dist/screensaver}"
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 NAME="Fireworks"
 BUNDLE="$OUT_DIR/$NAME.saver"
 ZIP="$OUT_DIR/fireworks-macos-screensaver.zip"
