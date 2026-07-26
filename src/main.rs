@@ -117,6 +117,10 @@ fn primary_window(mode: WindowMode) -> Window {
         mode,
         ..default()
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    if screensaver_mode() {
+        window.cursor_options.visible = false;
+    }
     #[cfg(target_arch = "wasm32")]
     {
         // Match canvas backing-store size to the browser viewport; native-mode
@@ -166,6 +170,11 @@ fn frame_dir() -> Option<PathBuf> {
     {
         None
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn screensaver_mode() -> bool {
+    std::env::var_os("FIREWORKS_SCREENSAVER").is_some()
 }
 
 fn native_mode_requested() -> bool {
@@ -1461,7 +1470,13 @@ fn handle_input(
     let mut rng = thread_rng();
     let design_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
 
-    if keys.just_pressed(KeyCode::Escape) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let in_screensaver = screensaver_mode();
+    #[cfg(target_arch = "wasm32")]
+    let in_screensaver = false;
+
+    // Let the OS dismiss the screensaver; Esc must not quit the engine early.
+    if !in_screensaver && keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
     }
     if keys.just_pressed(KeyCode::KeyA) {
@@ -1473,7 +1488,7 @@ fn handle_input(
         info!("FPS overlay: {}", if overlay.visible { "on" } else { "off" });
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if keys.just_pressed(KeyCode::F11) {
+    if !in_screensaver && keys.just_pressed(KeyCode::F11) {
         if let Ok(mut window) = windows.single_mut() {
             window.mode = match window.mode {
                 WindowMode::Windowed => {

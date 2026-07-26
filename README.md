@@ -75,8 +75,9 @@ with the root `index.html` (pass `--no-default-features` via Trunk config).
 
 GitHub Actions runs [CI](.github/workflows/ci.yml) on pull requests and the
 [Release workflow](.github/workflows/release.yml) on every push to `main`. Each
-main push builds the macOS universal binary, Linux binary, and web bundle,
-publishes a versioned GitHub Release (`fireworks-macos-universal.tar.gz`,
+main push builds the macOS universal binary, macOS screensaver, Linux binary,
+and web bundle, publishes a versioned GitHub Release
+(`fireworks-macos-universal.tar.gz`, `fireworks-macos-screensaver.zip`,
 `fireworks-linux-x86_64.tar.gz`, and `fireworks-web.tar.gz`), and refreshes the
 rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
 release that [jtslay.com](https://jtslay.com/fireworks/) downloads for
@@ -87,6 +88,19 @@ run number (for example `v0.1.0.42`).
 
 You can also run the Release workflow manually from the **Actions** tab to
 rebuild without pushing to `main`.
+
+### macOS screensaver
+
+Releases include `fireworks-macos-screensaver.zip`. Unzip it, double-click
+`Fireworks.saver`, and choose Install. Then pick **Fireworks** under
+System Settings → Screen Saver.
+
+To build the `.saver` locally after a macOS binary build:
+
+```bash
+cargo build --release
+./scripts/create_macos_saver.sh target/release/fireworks
+```
 
 ## Controls
 
