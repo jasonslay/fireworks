@@ -75,9 +75,10 @@ with the root `index.html` (pass `--no-default-features` via Trunk config).
 
 GitHub Actions runs [CI](.github/workflows/ci.yml) on pull requests and the
 [Release workflow](.github/workflows/release.yml) on every push to `main`. Each
-main push builds the Linux binary and web bundle, publishes a versioned GitHub
-Release (`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz`), and
-refreshes the rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
+main push builds the macOS universal binary, Linux binary, and web bundle,
+publishes a versioned GitHub Release (`fireworks-macos-universal.tar.gz`,
+`fireworks-linux-x86_64.tar.gz`, and `fireworks-web.tar.gz`), and refreshes the
+rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
 release that [jtslay.com](https://jtslay.com/fireworks/) downloads for
 `/fireworks/`.
 

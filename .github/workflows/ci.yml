@@ -36,6 +36,27 @@ jobs:
       - name: Build Linux binary
         run: cargo build --release
 
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS universal binary
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output fireworks-macos \
+            target/aarch64-apple-darwin/release/fireworks \
+            target/x86_64-apple-darwin/release/fireworks
+          lipo -info fireworks-macos
+
   wasm:
     runs-on: ubuntu-latest
     steps:

@@ -29,6 +29,41 @@ jobs:
           version=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           echo "tag=v${version}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
+  build-macos:
+    runs-on: macos-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build macOS universal binary
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output fireworks-macos \
+            target/aarch64-apple-darwin/release/fireworks \
+            target/x86_64-apple-darwin/release/fireworks
+          lipo -info fireworks-macos
+
+      - name: Package macOS binary
+        run: |
+          mkdir -p release/macos
+          cp fireworks-macos release/macos/fireworks
+          cp LICENSE release/macos/
+          tar -czf fireworks-macos-universal.tar.gz -C release/macos .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: fireworks-macos-universal.tar.gz
+          if-no-files-found: error
+
   build-linux:
     runs-on: ubuntu-latest
     needs: prepare
@@ -141,9 +176,14 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [prepare, build-linux, build-web]
+    needs: [prepare, build-macos, build-linux, build-web]
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: artifacts
 
       - uses: actions/download-artifact@v4
         with:
@@ -163,6 +203,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
+            artifacts/fireworks-macos-universal.tar.gz
             artifacts/fireworks-linux-x86_64.tar.gz
             artifacts/fireworks-web.tar.gz
         env:
