@@ -111,12 +111,17 @@ public final class FireworksView: ScreenSaverView {
 
     private func engineURL() -> URL? {
         let bundle = Bundle(for: FireworksView.self)
-        let bundled = bundle.bundleURL
-            .appendingPathComponent("Contents/MacOS/fireworks", isDirectory: false)
-        if FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return bundled
+        // Engine is shipped as Contents/Resources/fireworks (not MacOS/) so its
+        // name cannot collide with the Fireworks plugin on case-insensitive APFS.
+        if let url = bundle.url(forResource: "fireworks", withExtension: nil),
+           FileManager.default.isExecutableFile(atPath: url.path) {
+            return url
         }
-        return bundle.url(forResource: "fireworks", withExtension: nil)
+        let fallback = bundle.resourceURL?.appendingPathComponent("fireworks", isDirectory: false)
+        if let fallback, FileManager.default.isExecutableFile(atPath: fallback.path) {
+            return fallback
+        }
+        return nil
     }
 
     private func startEngine() {

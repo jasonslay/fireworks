@@ -28,8 +28,16 @@ if [[ ! -f "$SRC/FireworksView.swift" || ! -f "$SRC/Info.plist" ]]; then
   exit 1
 fi
 
+BINARY_SIZE=$(wc -c < "$BINARY" | tr -d ' ')
+if (( BINARY_SIZE < 1000000 )); then
+  echo "error: fireworks binary looks too small (${BINARY_SIZE} bytes): $BINARY" >&2
+  exit 1
+fi
+
 rm -rf "$BUNDLE" "$ZIP"
-mkdir -p "$BUNDLE/Contents/MacOS"
+# Plugin lives in MacOS/; engine binary in Resources/ so the names cannot
+# collide on macOS's default case-insensitive filesystem (Fireworks vs fireworks).
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
 cp "$SRC/Info.plist" "$BUNDLE/Contents/Info.plist"
 
@@ -41,8 +49,8 @@ if VERSION=$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/version = "\(.*\)"/
     || true
 fi
 
-cp "$BINARY" "$BUNDLE/Contents/MacOS/fireworks"
-chmod +x "$BUNDLE/Contents/MacOS/fireworks"
+cp "$BINARY" "$BUNDLE/Contents/Resources/fireworks"
+chmod +x "$BUNDLE/Contents/Resources/fireworks"
 
 COMMON=(
   -sdk "$SDK"
@@ -68,13 +76,26 @@ lipo -create \
   -output "$BUNDLE/Contents/MacOS/$NAME"
 rm -f "$BUNDLE/Contents/MacOS/arm64.bin" "$BUNDLE/Contents/MacOS/x86_64.bin"
 
+ENGINE_SIZE=$(wc -c < "$BUNDLE/Contents/Resources/fireworks" | tr -d ' ')
+if (( ENGINE_SIZE != BINARY_SIZE )); then
+  echo "error: engine binary was altered during packaging (${ENGINE_SIZE} vs ${BINARY_SIZE} bytes)" >&2
+  exit 1
+fi
+
 # Ad-hoc sign so Gatekeeper will load the bundle on the build machine / CI.
 codesign --force --deep --sign - --timestamp=none "$BUNDLE"
 
 # Zip keeps the .saver as a single downloadable installable artifact.
 ditto -c -k --keepParent "$BUNDLE" "$ZIP"
 
+ZIP_SIZE=$(wc -c < "$ZIP" | tr -d ' ')
+if (( ZIP_SIZE < BINARY_SIZE / 2 )); then
+  echo "error: screensaver zip is suspiciously small (${ZIP_SIZE} bytes; binary was ${BINARY_SIZE})" >&2
+  exit 1
+fi
+
 echo "Built: $BUNDLE"
-echo "Zip:   $ZIP"
+echo "Zip:   $ZIP (${ZIP_SIZE} bytes; engine ${ENGINE_SIZE} bytes)"
 lipo -info "$BUNDLE/Contents/MacOS/$NAME"
-lipo -info "$BUNDLE/Contents/MacOS/fireworks"
+lipo -info "$BUNDLE/Contents/Resources/fireworks"
+ls -lh "$BUNDLE/Contents/MacOS/$NAME" "$BUNDLE/Contents/Resources/fireworks" "$ZIP"
