@@ -21,6 +21,11 @@
         height: 100%;
       }
 
+      #bevy-canvas {
+        position: fixed;
+        inset: 0;
+      }
+
       #loading {
         position: fixed;
         inset: 0;
@@ -49,6 +54,7 @@
     </style>
   </head>
   <body>
+    <canvas id="bevy-canvas"></canvas>
     <div id="loading">
       <p>Loading fireworks…</p>
       <p id="hint">
@@ -58,9 +64,17 @@
     <script type="module">
       import init from "./fireworks.js";
 
-      init().then(() => {
-        document.getElementById("loading")?.classList.add("hidden");
-      });
+      init()
+        .then(() => {
+          document.getElementById("loading")?.classList.add("hidden");
+        })
+        .catch((err) => {
+          console.error(err);
+          const hint = document.getElementById("hint");
+          if (hint) {
+            hint.textContent = String(err);
+          }
+        });
     </script>
   </body>
 </html>
