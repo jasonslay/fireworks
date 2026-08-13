@@ -64,7 +64,7 @@
     <script type="module">
       import init from "./fireworks.js";
 
-      init()
+      init({ module_or_path: new URL("./fireworks_bg.wasm", import.meta.url) })
         .then(() => {
           document.getElementById("loading")?.classList.add("hidden");
         })
