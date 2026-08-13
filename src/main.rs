@@ -11,16 +11,21 @@
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera::{Hdr, ScalingMode},
-    core_pipeline::tonemapping::{DebandDither, Tonemapping},
+    camera::ScalingMode,
+    core_pipeline::tonemapping::Tonemapping,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
-    post_process::bloom::Bloom,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     text::FontSize,
     window::{CursorOptions, PrimaryWindow, WindowMode},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::camera::Hdr;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::core_pipeline::tonemapping::DebandDither;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::post_process::bloom::Bloom;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::window::MonitorSelection;
 #[cfg(not(target_arch = "wasm32"))]
@@ -117,6 +122,8 @@ fn primary_window(mode: WindowMode) -> Window {
         mode,
         // Match canvas backing-store size to the browser viewport; native-mode
         // scaling (SceneRoot + ortho) keeps the 1280×800 design proportional.
+        #[cfg(target_arch = "wasm32")]
+        canvas: Some("#bevy-canvas".into()),
         #[cfg(target_arch = "wasm32")]
         fit_canvas_to_parent: true,
         #[cfg(target_arch = "wasm32")]
@@ -811,9 +818,14 @@ fn setup(
             clear_color: ClearColorConfig::Custom(Color::linear_rgb(0.002, 0.003, 0.010)),
             ..default()
         },
-        Hdr,
         Tonemapping::TonyMcMapface,
+        // Bloom/HDR are not WebGL2-compatible in Bevy 0.19; keep them native-only
+        // so the WASM build can start.
+        #[cfg(not(target_arch = "wasm32"))]
+        Hdr,
+        #[cfg(not(target_arch = "wasm32"))]
         DebandDither::Enabled,
+        #[cfg(not(target_arch = "wasm32"))]
         Bloom {
             intensity: 0.35,
             ..Bloom::NATURAL
