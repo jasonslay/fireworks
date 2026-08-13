@@ -11,7 +11,7 @@
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera::ScalingMode,
+    camera::{Hdr, ScalingMode},
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
@@ -110,20 +110,18 @@ fn window_mode() -> WindowMode {
 }
 
 fn primary_window(mode: WindowMode) -> Window {
-    let mut window = Window {
+    Window {
         title: "Fireworks".into(),
         resolution: (DESIGN_WIDTH as u32, DESIGN_HEIGHT as u32).into(),
         mode,
-        ..default()
-    };
-    #[cfg(target_arch = "wasm32")]
-    {
         // Match canvas backing-store size to the browser viewport; native-mode
         // scaling (SceneRoot + ortho) keeps the 1280×800 design proportional.
-        window.fit_canvas_to_parent = true;
-        window.resizable = true;
+        #[cfg(target_arch = "wasm32")]
+        fit_canvas_to_parent: true,
+        #[cfg(target_arch = "wasm32")]
+        resizable: true,
+        ..default()
     }
-    window
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -793,10 +791,10 @@ fn setup(
     commands.spawn((
         Camera2d,
         Camera {
-            hdr: true,
             clear_color: ClearColorConfig::Custom(Color::linear_rgb(0.002, 0.003, 0.010)),
             ..default()
         },
+        Hdr,
         Tonemapping::TonyMcMapface,
         DebandDither::Enabled,
         Bloom {
@@ -1422,7 +1420,7 @@ fn auto_launch(
         return;
     }
     launcher.timer.tick(time.delta());
-    if !launcher.timer.finished() {
+    if !launcher.timer.is_finished() {
         return;
     }
     let mut rng = thread_rng();
@@ -2248,7 +2246,7 @@ fn light_foreground_hills(
         active.truncate(12);
     }
 
-    let Some(mesh) = meshes.get_mut(&cfg.mesh) else {
+    let Some(mut mesh) = meshes.get_mut(&cfg.mesh) else {
         return;
     };
     let mut colors = cfg.base_colors.clone();
@@ -2283,7 +2281,7 @@ fn spawn_satellites(
     existing: Query<&Satellite>,
 ) {
     spawner.timer.tick(time.delta());
-    if !spawner.timer.finished() {
+    if !spawner.timer.is_finished() {
         return;
     }
     let mut rng = thread_rng();

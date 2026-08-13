@@ -23,6 +23,8 @@ rand = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
 
 # Fast runtime even in dev builds (bevy is unusably slow unoptimized)
 [profile.dev]
