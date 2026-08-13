@@ -1,6 +1,6 @@
 # Fireworks
 
-A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/).
+A realistic fireworks simulator written in Rust with [Bevy](https://bevyengine.org/) 0.19.1.
 
 <p align="center">
   <img src="docs/screenshots/demo.gif" alt="Fireworks finale over the Front Range" width="1280" />
@@ -13,7 +13,7 @@ ridgeline; rising tails and falling embers appear and disappear around it.
 
 ## Requirements
 
-- [Rust](https://rustup.rs/) 1.85 or newer (edition 2024)
+- [Rust](https://rustup.rs/) 1.95 or newer (edition 2024)
 
 ## Run
 

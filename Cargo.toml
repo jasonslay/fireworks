@@ -10,32 +10,21 @@ default = ["native"]
 native = ["bevy/x11", "bevy/wayland"]
 
 [dependencies]
-bevy = { version = "0.16", default-features = false, features = [
-    "std",
-    "async_executor",
-    "multi_threaded",
-    "bevy_asset",
-    "bevy_color",
-    "bevy_core_pipeline",
-    "bevy_render",
-    "bevy_sprite",
-    "bevy_window",
-    "bevy_winit",
-    "bevy_log",
-    "bevy_ui",
-    "bevy_text",
-    "default_font",
+bevy = { version = "0.19.1", default-features = false, features = [
+    "2d",
+    "ui",
     "web",
-    "webgl2",
     "png",
     "tonemapping_luts",
     "ktx2",
-    "zstd",
+    "zstd_rust",
 ] }
 rand = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
 
 # Fast runtime even in dev builds (bevy is unusably slow unoptimized)
 [profile.dev]
