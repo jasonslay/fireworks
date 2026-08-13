@@ -10,13 +10,13 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install Linux build dependencies
         run: |
@@ -36,17 +36,48 @@ jobs:
       - name: Build Linux binary
         run: cargo build --release
 
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2.9.1
+
+      - name: Build macOS universal binary
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output fireworks-macos \
+            target/aarch64-apple-darwin/release/fireworks \
+            target/x86_64-apple-darwin/release/fireworks
+          lipo -info fireworks-macos
+
+      - name: Compile screensaver plugin
+        run: |
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          swiftc -sdk "$SDK" \
+            -framework ScreenSaver -framework AppKit -framework WebKit \
+            -emit-library -Xlinker -bundle -module-name Fireworks -O \
+            -o /tmp/Fireworks \
+            macos/screensaver/FireworksView.swift
+          lipo -info /tmp/Fireworks
+
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install web build tools
         run: |

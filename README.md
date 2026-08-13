@@ -75,9 +75,12 @@ with the root `index.html` (pass `--no-default-features` via Trunk config).
 
 GitHub Actions runs [CI](.github/workflows/ci.yml) on pull requests and the
 [Release workflow](.github/workflows/release.yml) on every push to `main`. Each
-main push builds the Linux binary and web bundle, publishes a versioned GitHub
-Release (`fireworks-linux-x86_64.tar.gz` and `fireworks-web.tar.gz`), and
-refreshes the rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
+main push builds the macOS universal binary, macOS screensaver (WebAssembly
+embedded in a `.saver`), Linux binary, and web bundle, publishes a versioned
+GitHub Release (`fireworks-macos-universal.tar.gz`,
+`fireworks-macos-screensaver.zip`, `fireworks-linux-x86_64.tar.gz`, and
+`fireworks-web.tar.gz`), and refreshes the
+rolling [`web`](https://github.com/jasonslay/fireworks/releases/tag/web)
 release that [jtslay.com](https://jtslay.com/fireworks/) downloads for
 `/fireworks/`.
 
@@ -86,6 +89,66 @@ run number (for example `v0.1.0.42`).
 
 You can also run the Release workflow manually from the **Actions** tab to
 rebuild without pushing to `main`.
+
+### macOS screensaver
+
+Releases include `fireworks-macos-screensaver.zip`. The `.saver` embeds the
+WebAssembly build in a `WKWebView` (macOS’s screensaver sandbox cannot launch
+the native binary as a child process).
+
+**Do not double-click the `.saver` from Downloads** — Gatekeeper will block
+unsigned plugins and `xattr` alone often is not enough on Sonoma/Sequoia.
+
+**Install (recommended):**
+
+1. Unzip `fireworks-macos-screensaver.zip`
+2. Right-click **Install Fireworks Screensaver.command** → **Open** (confirm)
+3. Pick **Fireworks** under System Settings → Screen Saver
+
+That installer clears quarantine, ad-hoc re-signs the bundle on your Mac, and
+copies it to `~/Library/Screen Savers/`.
+
+If macOS still shows a malware warning:
+
+1. Trigger the warning once (open/select Fireworks)
+2. System Settings → **Privacy & Security** → scroll to **Security** → **Open Anyway**
+3. Run the installer again
+
+Or from Terminal after unzipping:
+
+```bash
+./scripts/install_macos_saver.sh ./Fireworks.saver
+# or:
+./scripts/install_macos_saver.sh ./fireworks-macos-screensaver.zip
+```
+
+To build the `.saver` locally:
+
+```bash
+./scripts/build_web.sh
+./scripts/create_macos_saver.sh dist
+```
+
+#### Signing & notarization (removes the malware warning)
+
+Ad-hoc signed builds trigger *“Apple could not verify … malware”* for anything
+downloaded from the internet. To ship a Gatekeeper-clean `.saver`, add these
+GitHub Actions secrets (Apple Developer Program required):
+
+| Secret | Value |
+|--------|--------|
+| `MACOS_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | Password for that `.p12` |
+| `MACOS_CODESIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_API_KEY` | Contents of App Store Connect API `.p8` key |
+| `APPLE_API_KEY_ID` | Key ID |
+| `APPLE_API_ISSUER_ID` | Issuer UUID |
+| `APPLE_TEAM_ID` | 10-character Team ID |
+
+Export the cert: `base64 -i Certificates.p12 | pbcopy`. Create an App Store
+Connect API key with Developer access. The Release workflow imports the cert,
+signs with Hardened Runtime, notarizes via `notarytool`, and staples before
+zipping.
 
 ## Controls
 
