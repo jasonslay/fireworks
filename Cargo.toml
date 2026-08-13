@@ -10,27 +10,14 @@ default = ["native"]
 native = ["bevy/x11", "bevy/wayland"]
 
 [dependencies]
-bevy = { version = "0.16", default-features = false, features = [
-    "std",
-    "async_executor",
-    "multi_threaded",
-    "bevy_asset",
-    "bevy_color",
-    "bevy_core_pipeline",
-    "bevy_render",
-    "bevy_sprite",
-    "bevy_window",
-    "bevy_winit",
-    "bevy_log",
-    "bevy_ui",
-    "bevy_text",
-    "default_font",
+bevy = { version = "0.19.1", default-features = false, features = [
+    "2d",
+    "ui",
     "web",
-    "webgl2",
     "png",
     "tonemapping_luts",
     "ktx2",
-    "zstd",
+    "zstd_rust",
 ] }
 rand = "0.8"
 

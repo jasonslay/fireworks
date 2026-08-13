@@ -11,15 +11,14 @@
 
 use bevy::{
     asset::RenderAssetUsages,
-    core_pipeline::{
-        bloom::Bloom,
-        tonemapping::{DebandDither, Tonemapping},
-    },
+    camera::ScalingMode,
+    core_pipeline::tonemapping::{DebandDither, Tonemapping},
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
+    post_process::bloom::Bloom,
     prelude::*,
-    render::camera::ScalingMode,
-    render::mesh::{Indices, PrimitiveTopology},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    text::FontSize,
     window::{PrimaryWindow, WindowMode},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -113,7 +112,7 @@ fn window_mode() -> WindowMode {
 fn primary_window(mode: WindowMode) -> Window {
     let mut window = Window {
         title: "Fireworks".into(),
-        resolution: (DESIGN_WIDTH, DESIGN_HEIGHT).into(),
+        resolution: (DESIGN_WIDTH as u32, DESIGN_HEIGHT as u32).into(),
         mode,
         ..default()
     };
@@ -331,11 +330,11 @@ fn capture_screenshot(mut commands: Commands, mut job: ResMut<ScreenshotJob>) {
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path))
-        .observe(|_: Trigger<ScreenshotCaptured>| process::exit(0));
+        .observe(|_: On<ScreenshotCaptured>| process::exit(0));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Event)]
+#[derive(Message)]
 struct FrameSaved;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -377,7 +376,7 @@ fn configure_frame_capture(app: &mut App, dir: Option<PathBuf>) {
         waiting: false,
         finished: false,
     })
-    .add_event::<FrameSaved>()
+    .add_message::<FrameSaved>()
     .add_systems(Update, (capture_frame_sequence, finish_frame_capture).chain());
 }
 
@@ -410,7 +409,7 @@ fn capture_frame_sequence(mut commands: Commands, mut job: ResMut<FrameCaptureJo
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path))
         .observe(
-            |_: Trigger<ScreenshotCaptured>, mut writer: EventWriter<FrameSaved>| {
+            |_: On<ScreenshotCaptured>, mut writer: MessageWriter<FrameSaved>| {
                 writer.write(FrameSaved);
             },
         );
@@ -419,7 +418,7 @@ fn capture_frame_sequence(mut commands: Commands, mut job: ResMut<FrameCaptureJo
 #[cfg(not(target_arch = "wasm32"))]
 fn finish_frame_capture(
     mut job: ResMut<FrameCaptureJob>,
-    mut saved: EventReader<FrameSaved>,
+    mut saved: MessageReader<FrameSaved>,
 ) {
     if saved.read().next().is_some() {
         job.waiting = false;
@@ -729,7 +728,7 @@ fn setup_fps_hud(mut commands: Commands) {
             parent.spawn((
                 Text::new("FPS: --"),
                 TextFont {
-                    font_size: 16.0,
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextColor(Color::srgba(0.88, 0.91, 0.96, 0.88)),
@@ -967,8 +966,8 @@ fn setup(
     let mut columns = Vec::new();
     let mut base_colors = Vec::new();
     if let (
-        Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)),
-        Some(bevy::render::mesh::VertexAttributeValues::Float32x4(col)),
+        Some(VertexAttributeValues::Float32x3(pos)),
+        Some(VertexAttributeValues::Float32x4(col)),
     ) = (
         front.attribute(Mesh::ATTRIBUTE_POSITION),
         front.attribute(Mesh::ATTRIBUTE_COLOR),
@@ -1456,7 +1455,7 @@ fn handle_input(
     mouse: Res<ButtonInput<MouseButton>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let mut rng = thread_rng();
     let design_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
