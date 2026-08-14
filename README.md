@@ -184,7 +184,8 @@ horizon rather than stretching the composition.
 - **Night sky** – twinkling stars, a cratered moon, occasional faint satellite
   passes, and a soft horizon glow.
 - **Landscape** – layered mountain silhouettes with moonlit snow, plus
-  foreground hills whose mottled surface is relit by each burst.
+  foreground hills whose mottled surface is relit by each burst. Embers that
+  reach the valley floor can start a small grass fire on the near hills.
 
 ## Development
 

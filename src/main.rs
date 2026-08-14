@@ -47,6 +47,12 @@ const DESIGN_CAMERA_Y: f32 = -400.0;
 const MINE_DURATION: f32 = 5.0;
 /// Sodium/charcoal yellow driven hard into HDR so the spray blooms.
 const MINE_YELLOW: Vec3 = Vec3::new(1.0, 0.94, 0.10);
+/// Lift aerial breaks a little so they sit higher in the sky.
+const APEX_BOOST: f32 = 60.0;
+const MIN_BURST_HEIGHT: f32 = 200.0;
+const GRASS_FIRE_DURATION: f32 = 6.5;
+const GRASS_FIRE_MERGE: f32 = 52.0;
+const MAX_GRASS_FIRES: usize = 7;
 
 /// Stars fill the 1280×800 design view plus the extra sky revealed on tall
 /// portrait phones. AutoMin + a bottom-anchored camera keeps world width at
@@ -103,6 +109,7 @@ fn main() {
                 update_wind,
                 update_shells,
                 update_mine_sprays,
+                update_grass_fires,
                 update_sparks,
                 update_trails,
                 update_flashes,
@@ -651,6 +658,13 @@ struct MineSpray {
     life: f32,
     max_life: f32,
     spread: f32,
+}
+
+/// Small brush fire on the foreground hills, started by falling embers.
+#[derive(Component)]
+struct GrassFire {
+    life: f32,
+    max_life: f32,
 }
 
 #[derive(Component)]
@@ -1482,7 +1496,7 @@ fn launch_finale(
 ) {
     for _ in 0..8 {
         let x = rng.gen_range(-580.0..580.0);
-        let apex = rng.gen_range(40.0..420.0);
+        let apex = rng.gen_range(110.0..490.0);
         launch_shell(commands, scene, tex, rng, x, apex);
     }
 }
@@ -1525,7 +1539,7 @@ fn launch_shell(
         return;
     }
 
-    let h = (apex_y - GROUND_Y).max(120.0);
+    let h = (apex_y + APEX_BOOST - GROUND_Y).max(MIN_BURST_HEIGHT);
     let v0 = (2.0 * -GRAVITY * h).sqrt();
     spawn_in_scene(
         commands,
@@ -1567,7 +1581,7 @@ fn auto_launch(
     let count = if rng.gen_bool(0.18) { rng.gen_range(2..4) } else { 1 };
     for _ in 0..count {
         let x = rng.gen_range(-540.0..540.0);
-        let apex = rng.gen_range(70.0..400.0);
+        let apex = rng.gen_range(140.0..470.0);
         launch_shell(
             &mut commands,
             scene.as_deref(),
@@ -1788,6 +1802,18 @@ fn spawn_spark(
     pos: Vec2,
     spark: Spark,
 ) -> bool {
+    spawn_spark_z(budget, commands, scene, tex, pos, spark, 4.0)
+}
+
+fn spawn_spark_z(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    pos: Vec2,
+    spark: Spark,
+    z: f32,
+) -> bool {
     if !budget.can_spawn_spark() {
         return false;
     }
@@ -1803,7 +1829,7 @@ fn spawn_spark(
             custom_size: Some(Vec2::splat(quad)),
             ..default()
         },
-        Transform::from_xyz(pos.x, pos.y, 4.0),
+        Transform::from_xyz(pos.x, pos.y, z),
         spark,
         ),
     );
@@ -1971,9 +1997,9 @@ fn spawn_burst(
         BurstKind::Willow => {
             let gold = Vec3::new(1.0, 0.55, 0.14);
             let n = scale_burst_count(rng.gen_range(70..110), budget);
-            let speed = rng.gen_range(200.0..260.0);
+            let speed = rng.gen_range(170.0..230.0);
             for _ in 0..n {
-                let life = rng.gen_range(2.6..3.5);
+                let life = rng.gen_range(4.4..6.2);
                 spawn_spark(
                     budget,
                     commands,
@@ -1985,11 +2011,11 @@ fn spawn_burst(
                         life,
                         max_life: life,
                         color: gold,
-                        drag: 1.1,
-                        gravity_mul: 0.5,
+                        drag: 0.82,
+                        gravity_mul: 0.92,
                         size: rng.gen_range(2.2..3.0),
-                        trail_interval: 0.04,
-                        trail_life: 0.9,
+                        trail_interval: 0.042,
+                        trail_life: 1.2,
                         seed: rng.gen_range(0.0..1.0),
                         ..default()
                     },
@@ -2307,6 +2333,151 @@ fn update_mine_sprays(
     }
 }
 
+fn ridge_y_at(columns: &[Vec2], x: f32) -> f32 {
+    if columns.is_empty() {
+        return GROUND_Y + 16.0;
+    }
+    if x <= columns[0].x {
+        return columns[0].y;
+    }
+    for w in columns.windows(2) {
+        if x <= w[1].x {
+            let span = (w[1].x - w[0].x).max(0.001);
+            let t = ((x - w[0].x) / span).clamp(0.0, 1.0);
+            return w[0].y + (w[1].y - w[0].y) * t;
+        }
+    }
+    columns[columns.len() - 1].y
+}
+
+fn ignite_grass(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    hills: &FgHillsLighting,
+    fires: &mut Query<(&mut GrassFire, &Transform), Without<Spark>>,
+    x: f32,
+) {
+    for (mut fire, tf) in fires.iter_mut() {
+        if (tf.translation.x - x).abs() < GRASS_FIRE_MERGE {
+            fire.life = (fire.life + 1.2).min(fire.max_life);
+            return;
+        }
+    }
+    if fires.iter().count() >= MAX_GRASS_FIRES {
+        return;
+    }
+    let y = ridge_y_at(&hills.columns, x) + rng.gen_range(2.0..8.0);
+    spawn_grass_fire(commands, scene, tex, Vec2::new(x, y));
+}
+
+fn spawn_grass_fire(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    pos: Vec2,
+) {
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Sprite {
+            image: tex.clone(),
+            color: Color::linear_rgba(16.0, 6.0, 0.8, 1.0),
+            custom_size: Some(Vec2::splat(36.0)),
+            ..default()
+        },
+        Transform::from_xyz(pos.x, pos.y, 8.6),
+        GrassFire {
+            life: GRASS_FIRE_DURATION,
+            max_life: GRASS_FIRE_DURATION,
+        },
+        ),
+    );
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Transform::from_xyz(pos.x, pos.y, 0.0),
+        BurstLight {
+            life: GRASS_FIRE_DURATION + 0.4,
+            max_life: GRASS_FIRE_DURATION + 0.4,
+            color: Vec3::new(1.0, 0.38, 0.06),
+            sustain: true,
+        },
+        ),
+    );
+}
+
+fn update_grass_fires(
+    mut commands: Commands,
+    time: Res<Time>,
+    tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
+    mut budget: ResMut<ParticleBudget>,
+    mut fires: Query<(Entity, &mut GrassFire, &mut Transform, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    let now = time.elapsed_secs();
+    let mut rng = thread_rng();
+
+    for (entity, mut fire, mut tf, mut sprite) in &mut fires {
+        fire.life -= dt;
+        if fire.life <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        let age = (1.0 - fire.life / fire.max_life).clamp(0.0, 1.0);
+        let gate = smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(0.72, 1.0, age));
+        let flicker = 0.82 + 0.18 * (now * 19.0 + tf.translation.x * 0.05).sin().abs();
+        let glow = 14.0 * gate * flicker;
+        sprite.color = Color::linear_rgba(glow, glow * 0.38, glow * 0.05, gate.max(0.1));
+        tf.scale = Vec3::splat(0.7 + 0.45 * gate * flicker);
+
+        let raw = (dt * 22.0 * gate).round() as u32;
+        if raw == 0 {
+            continue;
+        }
+        let n = scale_burst_count(raw, &budget);
+        let pos = tf.translation.truncate();
+        for _ in 0..n {
+            if !budget.can_spawn_spark() {
+                break;
+            }
+            let color = if rng.gen_bool(0.35) {
+                Vec3::new(1.0, 0.85, 0.18)
+            } else if rng.gen_bool(0.5) {
+                Vec3::new(1.0, 0.42, 0.06)
+            } else {
+                Vec3::new(1.0, 0.22, 0.03)
+            };
+            let life = rng.gen_range(0.28..0.55);
+            spawn_spark_z(
+                &mut budget,
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                pos + Vec2::new(rng.gen_range(-8.0..8.0), rng.gen_range(0.0..6.0)),
+                Spark {
+                    vel: mine_dir(&mut rng, 0.55) * rng.gen_range(36.0..110.0),
+                    life,
+                    max_life: life,
+                    color,
+                    drag: 2.4,
+                    gravity_mul: 0.12,
+                    size: rng.gen_range(1.6..2.8),
+                    seed: rng.gen_range(0.0..1.0),
+                    brightness: rng.gen_range(1.1..1.6),
+                    ..default()
+                },
+                8.7,
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sparks
 // ---------------------------------------------------------------------------
@@ -2317,16 +2488,25 @@ fn update_sparks(
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
     scene: Option<Res<SceneRoot>>,
+    hills: Option<Res<FgHillsLighting>>,
     mut budget: ResMut<ParticleBudget>,
     mut sparks: Query<(Entity, &mut Spark, &mut Transform, &mut Sprite)>,
+    mut fires: Query<(&mut GrassFire, &Transform), Without<Spark>>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let mut rng = thread_rng();
+    let mut ground_hits: Vec<f32> = Vec::new();
 
     for (entity, mut spark, mut tf, mut sprite) in &mut sparks {
         spark.life -= dt;
         if spark.life <= 0.0 || tf.translation.y < GROUND_Y {
+            if tf.translation.y < GROUND_Y && spark.gravity_mul > 0.2 {
+                let x = tf.translation.x;
+                if !ground_hits.iter().any(|h| (h - x).abs() < GRASS_FIRE_MERGE) {
+                    ground_hits.push(x);
+                }
+            }
             budget.sparks = budget.sparks.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
@@ -2398,7 +2578,13 @@ fn update_sparks(
         // Trails — stop once the star dims; cap to one spawn per frame so hitches
         // don't clump trail bits at a single point. Flying fish keep a tail
         // almost until they burn out — the trail is the swimming body.
-        let trail_until = if spark.thrust > 0.0 { 0.82 } else { 0.58 };
+        let trail_until = if spark.thrust > 0.0 {
+            0.82
+        } else if spark.gravity_mul > 0.7 {
+            0.8
+        } else {
+            0.58
+        };
         if spark.trail_interval > 0.0 && age < trail_until {
             spark.trail_timer -= dt;
             if spark.trail_timer <= 0.0 {
@@ -2430,6 +2616,20 @@ fn update_sparks(
             0.685
         };
         tf.scale = Vec3::splat(scale);
+    }
+
+    if let Some(hills) = hills.as_deref() {
+        for x in ground_hits {
+            ignite_grass(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                &mut rng,
+                hills,
+                &mut fires,
+                x,
+            );
+        }
     }
 }
 
