@@ -889,13 +889,15 @@ fn setup(
     if scene_env().is_none() {
         for _ in 0..3 {
             let from_left = rng.gen_bool(0.5);
+            let x = rng.gen_range(-600.0..600.0);
+            let y = rng.gen_range(180.0..STAR_MAX_Y - 200.0);
             spawn_satellite(
                 &mut commands,
                 scene,
                 &tex,
                 &mut rng,
-                rng.gen_range(-600.0..600.0),
-                rng.gen_range(180.0..STAR_MAX_Y - 200.0),
+                x,
+                y,
                 from_left,
             );
         }
