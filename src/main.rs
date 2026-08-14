@@ -2,8 +2,8 @@
 //!
 //! Realism notes:
 //! - Stars are sampled on a 3D sphere and projected to 2D, which produces the
-//!   dense-rimmed look of real shell breaks. Mines sample an upward cone
-//!   instead, so they read as a ground-fired plume rather than an aerial break.
+//!   dense-rimmed look of real shell breaks. Mines are a 5-second ground
+//!   spray of bright yellow stars, sampled in an upward cone.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
 //! - HDR rendering + bloom provides the glow; particles use a soft radial
@@ -43,6 +43,9 @@ const GROUND_Y: f32 = -370.0;
 const DESIGN_WIDTH: f32 = 1280.0;
 const DESIGN_HEIGHT: f32 = 800.0;
 const DESIGN_CAMERA_Y: f32 = -400.0;
+const MINE_DURATION: f32 = 5.0;
+/// Sodium/charcoal yellow driven hard into HDR so the spray blooms.
+const MINE_YELLOW: Vec3 = Vec3::new(1.0, 0.94, 0.10);
 
 /// Stars fill the 1280×800 design view plus the extra sky revealed on tall
 /// portrait phones. AutoMin + a bottom-anchored camera keeps world width at
@@ -98,6 +101,7 @@ fn main() {
                 auto_launch,
                 update_wind,
                 update_shells,
+                update_mine_sprays,
                 update_sparks,
                 update_trails,
                 update_flashes,
@@ -638,6 +642,14 @@ struct Shell {
     tail_timer: f32,
 }
 
+/// Ground mortar that sprays stars for `MINE_DURATION` seconds.
+#[derive(Component)]
+struct MineSpray {
+    life: f32,
+    max_life: f32,
+    spread: f32,
+}
+
 #[derive(Component)]
 struct Spark {
     vel: Vec2,
@@ -658,6 +670,8 @@ struct Spark {
     /// Age fraction (0..1) at which this star breaks into a crossette; 0 = never.
     split_at: f32,
     seed: f32,
+    /// Multiplier on HDR intensity; 1 = normal shell star.
+    brightness: f32,
 }
 
 impl Default for Spark {
@@ -677,6 +691,7 @@ impl Default for Spark {
             strobe_phase: 0.0,
             split_at: 0.0,
             seed: 0.0,
+            brightness: 1.0,
         }
     }
 }
@@ -723,6 +738,8 @@ struct BurstLight {
     life: f32,
     max_life: f32,
     color: Vec3,
+    /// Hold brightness for the full life (mine sprays) instead of a burst decay.
+    sustain: bool,
 }
 
 #[derive(Resource)]
@@ -1481,23 +1498,19 @@ fn launch_shell(
     let kind = random_kind(rng);
     let palette = random_palette(rng);
 
-    // Mines fire from the mortar and break immediately — no aerial climb.
-    let (vel, fuse, size) = if kind == BurstKind::Mine {
-        (
-            Vec2::new(rng.gen_range(-16.0..16.0), rng.gen_range(50.0..110.0)),
-            rng.gen_range(0.03..0.08),
-            7.0,
-        )
-    } else {
-        let h = (apex_y - GROUND_Y).max(120.0);
-        let v0 = (2.0 * -GRAVITY * h).sqrt();
-        (
-            Vec2::new(rng.gen_range(-24.0..24.0), v0),
-            (v0 / -GRAVITY) * rng.gen_range(0.86..0.97),
-            9.0,
-        )
-    };
+    if kind == BurstKind::Mine {
+        spawn_mine_spray(
+            commands,
+            scene,
+            tex,
+            rng,
+            Vec2::new(launch_x, GROUND_Y),
+        );
+        return;
+    }
 
+    let h = (apex_y - GROUND_Y).max(120.0);
+    let v0 = (2.0 * -GRAVITY * h).sqrt();
     spawn_in_scene(
         commands,
         scene,
@@ -1505,13 +1518,13 @@ fn launch_shell(
         Sprite {
             image: tex.clone(),
             color: Color::linear_rgba(9.0, 6.5, 3.5, 1.0),
-            custom_size: Some(Vec2::splat(size)),
+            custom_size: Some(Vec2::splat(9.0)),
             ..default()
         },
         Transform::from_xyz(launch_x, GROUND_Y, 5.0),
         Shell {
-            vel,
-            fuse,
+            vel: Vec2::new(rng.gen_range(-24.0..24.0), v0),
+            fuse: (v0 / -GRAVITY) * rng.gen_range(0.86..0.97),
             kind,
             palette,
             tail_timer: 0.0,
@@ -1826,59 +1839,35 @@ fn spawn_burst(
     kind: BurstKind,
     pal: (Vec3, Vec3),
 ) {
-    let is_mine = kind == BurstKind::Mine;
+    if kind == BurstKind::Mine {
+        spawn_mine_spray(commands, scene, tex, rng, pos);
+        return;
+    }
 
     // The initial detonation flash that briefly lights the sky.
-    // Mines report at the tube mouth, so the flash sits a little above
-    // ground and runs hotter/whiter than an aerial break.
-    let flash_color = if is_mine {
-        pal.0 * 0.25 + Vec3::splat(0.85)
-    } else {
-        pal.0 * 0.4 + Vec3::splat(0.6)
-    };
-    let flash_pos = if is_mine {
-        pos + Vec2::new(0.0, 24.0)
-    } else {
-        pos
-    };
+    let flash_color = pal.0 * 0.4 + Vec3::splat(0.6);
     spawn_flash(
         budget,
         commands,
         scene,
         tex,
-        flash_pos,
-        if is_mine {
-            rng.gen_range(280.0..420.0)
-        } else {
-            rng.gen_range(220.0..340.0)
-        },
-        if is_mine { 0.22 } else { 0.17 },
+        pos,
+        rng.gen_range(220.0..340.0),
+        0.17,
         flash_color,
     );
-    if is_mine {
-        spawn_flash(
-            budget,
-            commands,
-            scene,
-            tex,
-            pos + Vec2::new(0.0, 12.0),
-            rng.gen_range(140.0..210.0),
-            0.12,
-            Vec3::new(1.0, 0.92, 0.78),
-        );
-    }
 
     // Invisible light that tints the foreground hills while the stars burn.
-    let light_life = if is_mine { 1.35 } else { 1.9 };
     spawn_in_scene(
         commands,
         scene,
         (
         Transform::from_xyz(pos.x, pos.y, 0.0),
         BurstLight {
-            life: light_life,
-            max_life: light_life,
+            life: 1.9,
+            max_life: 1.9,
             color: pal.0 * 0.75 + Vec3::splat(0.25),
+            sustain: false,
         },
         ),
     );
@@ -2125,153 +2114,124 @@ fn spawn_burst(
                 );
             }
         }
-        BurstKind::Mine => {
-            // Stars, gold sparks, and crackle packed into an upward cone.
-            // They ignite as they leave the tube, forming a dense wall of light.
-            let spread = rng.gen_range(0.70..0.95);
-            let core_spread = spread * 0.55;
-            let speed = rng.gen_range(380.0..520.0);
-            let gold = Vec3::new(1.0, 0.55, 0.14);
+        BurstKind::Mine => {}
+    }
+}
 
-            let n_stars = scale_burst_count(rng.gen_range(140..200), budget);
-            for _ in 0..n_stars {
-                let origin = pos
-                    + Vec2::new(rng.gen_range(-3.5..3.5), rng.gen_range(0.0..8.0));
-                let life = rng.gen_range(1.05..1.55);
-                spawn_spark(
-                    budget,
-                    commands,
-                    scene,
-                    tex,
-                    origin,
-                    Spark {
-                        vel: mine_dir(rng, spread) * speed * rng.gen_range(0.88..1.08),
-                        life,
-                        max_life: life,
-                        color: pal.0,
-                        drag: 1.7,
-                        gravity_mul: 0.62,
-                        size: rng.gen_range(2.6..3.6),
-                        trail_interval: 0.028,
-                        trail_life: 0.38,
-                        seed: rng.gen_range(0.0..1.0),
-                        ..default()
-                    },
-                );
-            }
+fn spawn_mine_spray(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    pos: Vec2,
+) {
+    let glow = pos + Vec2::new(0.0, 10.0);
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Sprite {
+            image: tex.clone(),
+            color: Color::linear_rgba(24.0, 22.0, 2.4, 1.0),
+            custom_size: Some(Vec2::splat(72.0)),
+            ..default()
+        },
+        Transform::from_xyz(glow.x, glow.y, 6.0),
+        MineSpray {
+            life: MINE_DURATION,
+            max_life: MINE_DURATION,
+            spread: rng.gen_range(0.38..0.52),
+        },
+        ),
+    );
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Transform::from_xyz(pos.x, pos.y, 0.0),
+        BurstLight {
+            life: MINE_DURATION + 0.35,
+            max_life: MINE_DURATION + 0.35,
+            color: MINE_YELLOW * 0.85 + Vec3::splat(0.15),
+            sustain: true,
+        },
+        ),
+    );
+}
 
-            // Second-color core, tighter and a little slower.
-            let n_core = scale_burst_count(rng.gen_range(40..70), budget);
-            for _ in 0..n_core {
-                let origin = pos
-                    + Vec2::new(rng.gen_range(-2.5..2.5), rng.gen_range(0.0..6.0));
-                let life = rng.gen_range(0.9..1.35);
-                spawn_spark(
-                    budget,
-                    commands,
-                    scene,
-                    tex,
-                    origin,
-                    Spark {
-                        vel: mine_dir(rng, core_spread)
-                            * speed
-                            * 0.72
-                            * rng.gen_range(0.85..1.1),
-                        life,
-                        max_life: life,
-                        color: pal.1,
-                        drag: 1.8,
-                        gravity_mul: 0.6,
-                        size: rng.gen_range(2.3..3.2),
-                        trail_interval: 0.034,
-                        trail_life: 0.32,
-                        seed: rng.gen_range(0.0..1.0),
-                        ..default()
-                    },
-                );
-            }
+fn update_mine_sprays(
+    mut commands: Commands,
+    time: Res<Time>,
+    tex: Res<ParticleTexture>,
+    scene: Option<Res<SceneRoot>>,
+    mut budget: ResMut<ParticleBudget>,
+    mut mines: Query<(Entity, &mut MineSpray, &mut Transform, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    let now = time.elapsed_secs();
+    let mut rng = thread_rng();
 
-            // Gold/orange sparks that fill the lower plume.
-            let n_sparks = scale_burst_count(rng.gen_range(50..85), budget);
-            for _ in 0..n_sparks {
-                let origin = pos
-                    + Vec2::new(rng.gen_range(-5.0..5.0), rng.gen_range(0.0..10.0));
-                let life = rng.gen_range(0.45..0.85);
-                spawn_spark(
-                    budget,
-                    commands,
-                    scene,
-                    tex,
-                    origin,
-                    Spark {
-                        vel: mine_dir(rng, spread * 1.12)
-                            * rng.gen_range(180.0..320.0),
-                        life,
-                        max_life: life,
-                        color: gold,
-                        drag: 2.2,
-                        gravity_mul: 0.7,
-                        size: rng.gen_range(1.6..2.5),
-                        seed: rng.gen_range(0.0..1.0),
-                        ..default()
-                    },
-                );
-            }
+    for (entity, mut mine, mut tf, mut sprite) in &mut mines {
+        mine.life -= dt;
+        if mine.life <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
 
-            // Crackle / report fragments — short, bright, noisy scatter.
-            let n_crackle = scale_burst_count(rng.gen_range(40..70), budget);
-            for _ in 0..n_crackle {
-                let origin = pos
-                    + Vec2::new(rng.gen_range(-6.0..6.0), rng.gen_range(0.0..14.0));
-                let life = rng.gen_range(0.18..0.42);
-                spawn_spark(
-                    budget,
-                    commands,
-                    scene,
-                    tex,
-                    origin,
-                    Spark {
-                        vel: mine_dir(rng, 1.05) * rng.gen_range(220.0..480.0),
-                        life,
-                        max_life: life,
-                        color: Vec3::new(0.95, 0.9, 0.78),
-                        drag: 2.6,
-                        gravity_mul: 0.45,
-                        size: rng.gen_range(1.4..2.2),
-                        seed: rng.gen_range(0.0..1.0),
-                        ..default()
-                    },
-                );
-            }
+        let age = (1.0 - mine.life / mine.max_life).clamp(0.0, 1.0);
+        let gate = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.88, 1.0, age));
+        let pulse = 0.88 + 0.12 * (now * 28.0).sin().abs();
+        let glow = 24.0 * gate * pulse;
+        sprite.color = Color::linear_rgba(glow, glow * 0.92, glow * 0.10, gate.max(0.08));
+        tf.scale = Vec3::splat(0.75 + 0.35 * gate * pulse);
 
-            // A handful of thick rising comets in the same cone.
-            let n_comets = scale_burst_count(rng.gen_range(8..14), budget);
-            for _ in 0..n_comets {
-                let origin = pos
-                    + Vec2::new(rng.gen_range(-2.0..2.0), rng.gen_range(0.0..6.0));
-                let life = rng.gen_range(1.2..1.7);
-                spawn_spark(
-                    budget,
-                    commands,
-                    scene,
-                    tex,
-                    origin,
-                    Spark {
-                        vel: mine_dir(rng, core_spread)
-                            * rng.gen_range(280.0..400.0),
-                        life,
-                        max_life: life,
-                        color: pal.0 * 0.55 + gold * 0.45,
-                        drag: 1.25,
-                        gravity_mul: 0.58,
-                        size: rng.gen_range(4.4..5.8),
-                        trail_interval: 0.018,
-                        trail_life: 0.55,
-                        seed: rng.gen_range(0.0..1.0),
-                        ..default()
-                    },
-                );
+        let raw = (dt * 340.0 * gate).round() as u32;
+        if raw == 0 {
+            continue;
+        }
+        let n = scale_burst_count(raw, &budget);
+        let pos = tf.translation.truncate() + Vec2::new(0.0, -6.0);
+        for _ in 0..n {
+            if !budget.can_spawn_spark() {
+                break;
             }
+            let hot = rng.gen_bool(0.22);
+            let color = if hot {
+                Vec3::new(1.0, 0.98, 0.42)
+            } else {
+                MINE_YELLOW
+            };
+            let trailed = rng.gen_bool(0.22);
+            let life = if trailed {
+                rng.gen_range(0.55..0.85)
+            } else {
+                rng.gen_range(0.38..0.68)
+            };
+            spawn_spark(
+                &mut budget,
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                pos + Vec2::new(rng.gen_range(-3.0..3.0), rng.gen_range(0.0..8.0)),
+                Spark {
+                    vel: mine_dir(&mut rng, mine.spread) * rng.gen_range(300.0..460.0),
+                    life,
+                    max_life: life,
+                    color,
+                    drag: rng.gen_range(1.5..2.1),
+                    gravity_mul: 0.58,
+                    size: if trailed {
+                        rng.gen_range(3.2..4.6)
+                    } else {
+                        rng.gen_range(2.0..3.2)
+                    },
+                    trail_interval: if trailed { 0.022 } else { 0.0 },
+                    trail_life: 0.28,
+                    seed: rng.gen_range(0.0..1.0),
+                    brightness: rng.gen_range(2.2..3.1),
+                    ..default()
+                },
+            );
         }
     }
 }
@@ -2401,6 +2361,7 @@ fn spark_color(spark: &Spark, age: f32, speed: f32, now: f32) -> (Vec3, f32) {
     // HDR intensity: ignition flash, then a steady decay.
     let mut i = 9.0 * (1.0 - age).powf(1.6) + 0.35;
     i *= 1.0 + hot * 5.0;
+    i *= spark.brightness;
 
     // Burn flicker while the star is still bright; fade it out before the
     // ember phase so low-intensity stars don't pop frame-to-frame.
@@ -2545,8 +2506,10 @@ fn light_foreground_hills(
             continue;
         }
         let t = 1.0 - light.life / light.max_life;
-        // Sharp flash at detonation, then decay along with the star burn.
-        let env = if t < 0.08 {
+        let env = if light.sustain {
+            let fade = smoothstep(0.88, 1.0, t);
+            1.25 * (1.0 - fade)
+        } else if t < 0.08 {
             (t / 0.08) * 1.6
         } else {
             1.6 * (1.0 - (t - 0.08) / 0.92).powi(2)
