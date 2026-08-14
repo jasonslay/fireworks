@@ -11,6 +11,7 @@ distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.
 Mines spray bright yellow stars from the valley floor for five seconds.
+Flying fish dart and zigzag after a quiet aerial break, like a school dispersing.
 
 ## Requirements
 
@@ -173,9 +174,10 @@ horizon rather than stretching the composition.
 - **Pyrotechnic colors** – palettes based on real emitters (strontium red,
   barium green, copper blue, sodium gold, magnesium silver), with white-hot
   ignition fading through the star's color into a dim orange ember.
-- **Eight shell types** – peony, chrysanthemum, willow, palm, ring, crossette
-  (stars that split mid-flight), strobe, and mine (a 5-second ground spray of
-  very bright yellow stars).
+- **Nine shell types** – peony, chrysanthemum, willow, palm, ring, crossette
+  (stars that split mid-flight), strobe, mine (a 5-second ground spray of
+  very bright yellow stars), and flying fish (self-propelled fuse pieces
+  that dart and zigzag like a school dispersing).
 - **Physics** – gravity, per-star aerodynamic drag, and a slowly wandering wind.
 - **HDR + bloom** – particles render at HDR intensities through a soft radial
   texture and a bloom pass, so bright stars genuinely glow.
