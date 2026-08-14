@@ -86,6 +86,7 @@ fn main() {
         .insert_resource(NativeMode(native_mode_requested()))
         .insert_resource(ParticleBudget::default())
         .insert_resource(FpsOverlay::default())
+        .insert_resource(PointerGuard::default())
         .add_systems(Startup, (init_scene_root, setup, setup_fps_hud, apply_scene).chain())
         .add_systems(PostStartup, sync_native_view)
         .add_systems(
@@ -743,6 +744,12 @@ struct FpsHudRoot;
 #[derive(Component)]
 struct FpsHudText;
 
+/// Ignores synthesized mouse clicks that browsers fire after a touch.
+#[derive(Resource, Default)]
+struct PointerGuard {
+    ignore_mouse_for: f32,
+}
+
 fn setup_fps_hud(mut commands: Commands) {
     commands
         .spawn((
@@ -1070,10 +1077,10 @@ fn setup(
 
     if native.0 {
         info!(
-            "Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F = FPS overlay, Esc = quit"
+            "Controls: tap/click = launch at point, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, Esc = quit"
         );
     } else {
-        info!("Controls: click = launch at point, Space = finale salvo, A = toggle auto-launch, F = FPS overlay, F11 = fullscreen, Esc = quit");
+        info!("Controls: tap/click = launch at point, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, F11 = fullscreen, Esc = quit");
     }
     #[cfg(target_arch = "wasm32")]
     if native.0 {
@@ -1430,6 +1437,35 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
     }
 }
 
+fn launch_finale(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut ThreadRng,
+) {
+    for _ in 0..8 {
+        let x = rng.gen_range(-580.0..580.0);
+        let apex = rng.gen_range(40.0..420.0);
+        launch_shell(commands, scene, tex, rng, x, apex);
+    }
+}
+
+fn try_launch_at_viewport(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut ThreadRng,
+    camera: &Camera,
+    cam_tf: &GlobalTransform,
+    design_scale: f32,
+    viewport: Vec2,
+) {
+    if let Ok(world) = camera.viewport_to_world_2d(cam_tf, viewport) {
+        let x = world.x / design_scale + rng.gen_range(-15.0..15.0);
+        launch_shell(commands, scene, tex, rng, x, world.y / design_scale);
+    }
+}
+
 fn launch_shell(
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
@@ -1503,14 +1539,22 @@ fn handle_input(
     scene: Option<Res<SceneRoot>>,
     mut launcher: ResMut<Launcher>,
     mut overlay: ResMut<FpsOverlay>,
+    mut guard: ResMut<PointerGuard>,
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let mut rng = thread_rng();
     let design_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
+
+    guard.ignore_mouse_for = (guard.ignore_mouse_for - time.delta_secs()).max(0.0);
+    if touches.any_just_pressed() || touches.any_just_released() {
+        guard.ignore_mouse_for = 0.45;
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     let in_screensaver = screensaver_mode();
@@ -1541,36 +1585,45 @@ fn handle_input(
         }
     }
     if keys.just_pressed(KeyCode::Space) {
-        // Finale salvo.
-        for _ in 0..8 {
-            let x = rng.gen_range(-580.0..580.0);
-            let apex = rng.gen_range(40.0..420.0);
-            launch_shell(
-                &mut commands,
-                scene.as_deref(),
-                &tex.0,
-                &mut rng,
-                x,
-                apex,
-            );
-        }
+        launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng);
     }
-    if mouse.just_pressed(MouseButton::Left) {
-        let (Ok(window), Ok((camera, cam_tf))) = (windows.single_mut(), camera_q.single()) else {
-            return;
-        };
-        if let Some(cursor) = window.cursor_position() {
-            if let Ok(world) = camera.viewport_to_world_2d(cam_tf, cursor) {
-                let x = world.x / design_scale + rng.gen_range(-15.0..15.0);
-                launch_shell(
+
+    let camera = camera_q.single().ok();
+
+    if touches.any_just_pressed() {
+        if let Some((camera, cam_tf)) = camera {
+            if touches.iter().count() >= 2 {
+                launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng);
+            } else if let Some(touch) = touches.iter_just_pressed().next() {
+                try_launch_at_viewport(
                     &mut commands,
                     scene.as_deref(),
                     &tex.0,
                     &mut rng,
-                    x,
-                    world.y / design_scale,
+                    camera,
+                    cam_tf,
+                    design_scale,
+                    touch.position(),
                 );
             }
+        }
+    }
+
+    if mouse.just_pressed(MouseButton::Left) && guard.ignore_mouse_for <= 0.0 {
+        let (Ok(window), Some((camera, cam_tf))) = (windows.single_mut(), camera) else {
+            return;
+        };
+        if let Some(cursor) = window.cursor_position() {
+            try_launch_at_viewport(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                &mut rng,
+                camera,
+                cam_tf,
+                design_scale,
+                cursor,
+            );
         }
     }
 }
