@@ -3,7 +3,8 @@
 //! Realism notes:
 //! - Stars are sampled on a 3D sphere and projected to 2D, which produces the
 //!   dense-rimmed look of real shell breaks. Mines are a 5-second ground
-//!   spray of bright yellow stars, sampled in an upward cone.
+//!   spray of bright yellow stars, sampled in an upward cone. Flying fish
+//!   are self-propelled fuse pieces that dart and zigzag after a quiet break.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
 //! - HDR rendering + bloom provides the glow; particles use a soft radial
@@ -530,6 +531,7 @@ fn apply_scene(
                 (Vec2::new(0.0, 300.0), BurstKind::Crossette, (COLORS[1], COLORS[1])),
                 (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
                 (Vec2::new(-150.0, GROUND_Y + 10.0), BurstKind::Mine, (COLORS[0], COLORS[2])),
+                (Vec2::new(80.0, 220.0), BurstKind::FlyingFish, (COLORS[7], COLORS[2])),
             ];
             for (pos, kind, palette) in bursts {
                 spawn_burst(
@@ -631,6 +633,7 @@ enum BurstKind {
     Crossette,
     Strobe,
     Mine,
+    FlyingFish,
 }
 
 #[derive(Component)]
@@ -672,6 +675,13 @@ struct Spark {
     seed: f32,
     /// Multiplier on HDR intensity; 1 = normal shell star.
     brightness: f32,
+    /// Self-propulsion along `heading` (flying fish); 0 = ballistic only.
+    thrust: f32,
+    heading: f32,
+    wiggle_hz: f32,
+    wiggle_amp: f32,
+    /// Slow heading drift in rad/s, so each fish takes its own path.
+    turn: f32,
 }
 
 impl Default for Spark {
@@ -692,6 +702,11 @@ impl Default for Spark {
             split_at: 0.0,
             seed: 0.0,
             brightness: 1.0,
+            thrust: 0.0,
+            heading: 0.0,
+            wiggle_hz: 0.0,
+            wiggle_amp: 0.0,
+            turn: 0.0,
         }
     }
 }
@@ -1447,14 +1462,15 @@ fn random_palette(rng: &mut ThreadRng) -> (Vec3, Vec3) {
 
 fn random_kind(rng: &mut ThreadRng) -> BurstKind {
     match rng.gen_range(0..100) {
-        0..=22 => BurstKind::Peony,
-        23..=42 => BurstKind::Chrysanthemum,
-        43..=53 => BurstKind::Willow,
-        54..=62 => BurstKind::Palm,
-        63..=71 => BurstKind::Ring,
-        72..=80 => BurstKind::Crossette,
-        81..=89 => BurstKind::Strobe,
-        _ => BurstKind::Mine,
+        0..=20 => BurstKind::Peony,
+        21..=38 => BurstKind::Chrysanthemum,
+        39..=48 => BurstKind::Willow,
+        49..=56 => BurstKind::Palm,
+        57..=64 => BurstKind::Ring,
+        65..=72 => BurstKind::Crossette,
+        73..=80 => BurstKind::Strobe,
+        81..=89 => BurstKind::Mine,
+        _ => BurstKind::FlyingFish,
     }
 }
 
@@ -1845,6 +1861,8 @@ fn spawn_burst(
     }
 
     // The initial detonation flash that briefly lights the sky.
+    // Flying fish are a quiet break — a soft pop, then the school swims off.
+    let is_fish = kind == BurstKind::FlyingFish;
     let flash_color = pal.0 * 0.4 + Vec3::splat(0.6);
     spawn_flash(
         budget,
@@ -1852,20 +1870,25 @@ fn spawn_burst(
         scene,
         tex,
         pos,
-        rng.gen_range(220.0..340.0),
-        0.17,
+        if is_fish {
+            rng.gen_range(110.0..170.0)
+        } else {
+            rng.gen_range(220.0..340.0)
+        },
+        if is_fish { 0.11 } else { 0.17 },
         flash_color,
     );
 
     // Invisible light that tints the foreground hills while the stars burn.
+    let light_life = if is_fish { 1.5 } else { 1.9 };
     spawn_in_scene(
         commands,
         scene,
         (
         Transform::from_xyz(pos.x, pos.y, 0.0),
         BurstLight {
-            life: 1.9,
-            max_life: 1.9,
+            life: light_life,
+            max_life: light_life,
             color: pal.0 * 0.75 + Vec3::splat(0.25),
             sustain: false,
         },
@@ -2115,6 +2138,54 @@ fn spawn_burst(
             }
         }
         BurstKind::Mine => {}
+        BurstKind::FlyingFish => {
+            // Quiet break of self-propelled fuse pieces that dart and zigzag
+            // like a school of fish dispersing.
+            let n = scale_burst_count(rng.gen_range(22..38), budget);
+            let gold = Vec3::new(1.0, 0.72, 0.18);
+            let silver = Vec3::new(0.92, 0.94, 1.0);
+            let mixed = rng.gen_bool(0.55);
+            for _ in 0..n {
+                let dir = shell_dir(rng);
+                let heading = dir.to_angle() + rng.gen_range(-0.35..0.35);
+                let life = rng.gen_range(1.7..2.5);
+                let color = if !mixed {
+                    if rng.gen_bool(0.65) { gold } else { silver }
+                } else {
+                    match rng.gen_range(0..3) {
+                        0 => gold,
+                        1 => silver,
+                        _ => pal.0,
+                    }
+                };
+                spawn_spark(
+                    budget,
+                    commands,
+                    scene,
+                    tex,
+                    pos,
+                    Spark {
+                        vel: dir * rng.gen_range(50.0..130.0),
+                        life,
+                        max_life: life,
+                        color,
+                        drag: rng.gen_range(1.55..2.05),
+                        gravity_mul: 0.28,
+                        size: rng.gen_range(2.8..4.0),
+                        trail_interval: 0.018,
+                        trail_life: 0.48,
+                        seed: rng.gen_range(0.0..1.0),
+                        brightness: rng.gen_range(1.25..1.7),
+                        thrust: rng.gen_range(380.0..620.0),
+                        heading,
+                        wiggle_hz: rng.gen_range(4.0..8.0),
+                        wiggle_amp: rng.gen_range(0.7..1.55),
+                        turn: rng.gen_range(-1.4..1.4),
+                        ..default()
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -2267,6 +2338,17 @@ fn update_sparks(
         let g = GRAVITY * spark.gravity_mul * dt;
         spark.vel.y += g;
         spark.vel.x += wind.current * dt;
+        if spark.thrust > 0.0 {
+            spark.heading += spark.turn * dt;
+            let wiggle = (now * spark.wiggle_hz * TAU + spark.seed * TAU).sin()
+                * spark.wiggle_amp
+                + 0.32
+                    * (now * spark.wiggle_hz * 2.35 + spark.seed * 4.1).sin()
+                    * spark.wiggle_amp;
+            let dir = Vec2::from_angle(spark.heading + wiggle);
+            let thrust = spark.thrust;
+            spark.vel += dir * thrust * dt;
+        }
         tf.translation.x += spark.vel.x * dt;
         tf.translation.y += spark.vel.y * dt;
 
@@ -2314,8 +2396,10 @@ fn update_sparks(
         }
 
         // Trails — stop once the star dims; cap to one spawn per frame so hitches
-        // don't clump trail bits at a single point.
-        if spark.trail_interval > 0.0 && age < 0.58 {
+        // don't clump trail bits at a single point. Flying fish keep a tail
+        // almost until they burn out — the trail is the swimming body.
+        let trail_until = if spark.thrust > 0.0 { 0.82 } else { 0.58 };
+        if spark.trail_interval > 0.0 && age < trail_until {
             spark.trail_timer -= dt;
             if spark.trail_timer <= 0.0 {
                 spark.trail_timer += spark.trail_interval;
