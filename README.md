@@ -10,6 +10,7 @@ The scene is a moonlit night over the Front Range of Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.
+Mines break as they leave the tube, throwing a cone of stars up over the ridge.
 
 ## Requirements
 
@@ -172,8 +173,9 @@ horizon rather than stretching the composition.
 - **Pyrotechnic colors** – palettes based on real emitters (strontium red,
   barium green, copper blue, sodium gold, magnesium silver), with white-hot
   ignition fading through the star's color into a dim orange ember.
-- **Seven shell types** – peony, chrysanthemum, willow, palm, ring, crossette
-  (stars that split mid-flight), and strobe.
+- **Eight shell types** – peony, chrysanthemum, willow, palm, ring, crossette
+  (stars that split mid-flight), strobe, and mine (a ground-fired cone of
+  stars, sparks, and crackle that breaks as it leaves the tube).
 - **Physics** – gravity, per-star aerodynamic drag, and a slowly wandering wind.
 - **HDR + bloom** – particles render at HDR intensities through a soft radial
   texture and a bloom pass, so bright stars genuinely glow.
