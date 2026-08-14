@@ -43,6 +43,15 @@ const DESIGN_WIDTH: f32 = 1280.0;
 const DESIGN_HEIGHT: f32 = 800.0;
 const DESIGN_CAMERA_Y: f32 = -400.0;
 
+/// Stars fill the 1280×800 design view plus the extra sky revealed on tall
+/// portrait phones. AutoMin + a bottom-anchored camera keeps world width at
+/// 1280 and grows height; a 9:21 viewport reaches about y=2600.
+const STAR_MAIN_MAX_Y: f32 = 1000.0;
+const STAR_MAX_Y: f32 = 2800.0;
+const STAR_COUNT_MAIN: u32 = 520;
+const STAR_COUNT_UPPER: u32 = 400;
+const MAX_SATELLITES: usize = 5;
+
 fn main() {
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
@@ -851,31 +860,45 @@ fn setup(
 
     let mut rng = thread_rng();
 
-    // Night-sky stars. Spread well beyond the base 1280x800 view so
-    // maximized/fullscreen (and ultrawide) windows stay filled.
-    for _ in 0..520 {
-        let x = rng.gen_range(-1600.0..1600.0);
-        let y = rng.gen_range(GROUND_Y + 30.0..1000.0);
-        let size = rng.gen_range(0.8..2.4);
-        let base = rng.gen_range(0.15..0.8);
-        spawn_in_scene(
+    // Night-sky stars. The main band covers maximized/fullscreen and
+    // ultrawide windows; a second band fills the extra height on portrait
+    // phones so the top of the screen is not an empty void.
+    for _ in 0..STAR_COUNT_MAIN {
+        spawn_sky_star(
             &mut commands,
             scene,
-            (
-            Sprite {
-                image: tex.clone(),
-                color: Color::linear_rgba(base, base, base * 1.1, 1.0),
-                custom_size: Some(Vec2::splat(size * 3.0)),
-                ..default()
-            },
-            Transform::from_xyz(x, y, 0.0),
-            Star {
-                phase: rng.gen_range(0.0..TAU),
-                speed: rng.gen_range(0.5..2.5),
-                base,
-            },
-            ),
+            &tex,
+            &mut rng,
+            GROUND_Y + 30.0,
+            STAR_MAIN_MAX_Y,
         );
+    }
+    for _ in 0..STAR_COUNT_UPPER {
+        spawn_sky_star(
+            &mut commands,
+            scene,
+            &tex,
+            &mut rng,
+            STAR_MAIN_MAX_Y,
+            STAR_MAX_Y,
+        );
+    }
+
+    // A few satellites already crossing so the sky is not empty at start.
+    // Skip when capturing a named scene so those shots stay deterministic.
+    if scene_env().is_none() {
+        for _ in 0..3 {
+            let from_left = rng.gen_bool(0.5);
+            spawn_satellite(
+                &mut commands,
+                scene,
+                &tex,
+                &mut rng,
+                rng.gen_range(-600.0..600.0),
+                rng.gen_range(180.0..STAR_MAX_Y - 200.0),
+                from_left,
+            );
+        }
     }
 
     // Moon: crisp cratered disc plus a soft atmospheric halo behind it.
@@ -2307,6 +2330,72 @@ fn light_foreground_hills(
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
 }
 
+fn spawn_sky_star(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    y_min: f32,
+    y_max: f32,
+) {
+    let x = rng.gen_range(-1600.0..1600.0);
+    let y = rng.gen_range(y_min..y_max);
+    let size = rng.gen_range(0.8..2.4);
+    let base = rng.gen_range(0.15..0.8);
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+            Sprite {
+                image: tex.clone(),
+                color: Color::linear_rgba(base, base, base * 1.1, 1.0),
+                custom_size: Some(Vec2::splat(size * 3.0)),
+                ..default()
+            },
+            Transform::from_xyz(x, y, 0.0),
+            Star {
+                phase: rng.gen_range(0.0..TAU),
+                speed: rng.gen_range(0.5..2.5),
+                base,
+            },
+        ),
+    );
+}
+
+fn spawn_satellite(
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    x: f32,
+    y: f32,
+    from_left: bool,
+) {
+    // Sized so a pass crosses the ~1280-unit view in roughly 30 seconds.
+    let speed = rng.gen_range(38.0..50.0);
+    let vx = if from_left { speed } else { -speed };
+    let vy = rng.gen_range(-5.0..5.0);
+    let base = rng.gen_range(0.06..0.20);
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+            Sprite {
+                image: tex.clone(),
+                color: Color::linear_rgba(base, base, base * 1.05, 1.0),
+                custom_size: Some(Vec2::splat(4.5)),
+                ..default()
+            },
+            Transform::from_xyz(x, y, 0.5),
+            Satellite {
+                vel: Vec2::new(vx, vy),
+                base,
+                phase: rng.gen_range(0.0..TAU),
+            },
+        ),
+    );
+}
+
 fn spawn_satellites(
     mut commands: Commands,
     time: Res<Time>,
@@ -2322,42 +2411,26 @@ fn spawn_satellites(
     let mut rng = thread_rng();
     spawner
         .timer
-        .set_duration(Duration::from_secs_f32(rng.gen_range(18.0..50.0)));
+        .set_duration(Duration::from_secs_f32(rng.gen_range(10.0..28.0)));
     spawner.timer.reset();
 
-    // At most a couple in the sky at once; they should feel like a treat.
-    if existing.iter().count() >= 2 {
+    if existing.iter().count() >= MAX_SATELLITES {
         return;
     }
 
-    // Just outside the widest plausible view (ultrawide fullscreen ~ +-930),
+    // Just outside the widest plausible view (ultrawide fullscreen ~ ±930),
     // so they enter the frame within a few seconds of spawning.
     let from_left = rng.gen_bool(0.5);
     let x = if from_left { -980.0 } else { 980.0 };
-    let y = rng.gen_range(120.0..850.0);
-    // Sized so a pass crosses the ~1280-unit view in roughly 30 seconds.
-    let speed = rng.gen_range(38.0..50.0);
-    let vx = if from_left { speed } else { -speed };
-    let vy = rng.gen_range(-5.0..5.0);
-    let base = rng.gen_range(0.06..0.20);
-
-    spawn_in_scene(
+    let y = rng.gen_range(120.0..STAR_MAX_Y - 150.0);
+    spawn_satellite(
         &mut commands,
         scene.as_deref(),
-        (
-        Sprite {
-            image: tex.0.clone(),
-            color: Color::linear_rgba(base, base, base * 1.05, 1.0),
-            custom_size: Some(Vec2::splat(4.5)),
-            ..default()
-        },
-        Transform::from_xyz(x, y, 0.5),
-        Satellite {
-            vel: Vec2::new(vx, vy),
-            base,
-            phase: rng.gen_range(0.0..TAU),
-        },
-        ),
+        &tex.0,
+        &mut rng,
+        x,
+        y,
+        from_left,
     );
 }
 
