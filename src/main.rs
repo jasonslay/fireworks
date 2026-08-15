@@ -669,8 +669,6 @@ struct GrassFire {
     seed: f32,
     /// Dark scorch / coal bed under the glow; no flame particles.
     bed: bool,
-    /// First-frame ignition pop has already been spawned.
-    ignited: bool,
 }
 
 #[derive(Component)]
@@ -2421,7 +2419,6 @@ fn spawn_grass_fire(
             width,
             seed,
             bed: true,
-            ignited: true,
         },
         ),
     );
@@ -2442,7 +2439,6 @@ fn spawn_grass_fire(
             width,
             seed,
             bed: false,
-            ignited: false,
         },
         ),
     );
@@ -2454,7 +2450,7 @@ fn spawn_grass_fire(
         BurstLight {
             life: GRASS_FIRE_DURATION + 0.4,
             max_life: GRASS_FIRE_DURATION + 0.4,
-            color: Vec3::new(1.0, 0.32, 0.05),
+            color: Vec3::new(0.72, 0.22, 0.04),
             sustain: true,
         },
         ),
@@ -2493,12 +2489,13 @@ fn update_grass_fires(
         // Catch quickly, then crawl wider along the grass before dying back.
         let spread = smoothstep(0.0, 0.4, age) * (1.0 - smoothstep(0.62, 1.0, age));
         // Tongues die first; the coal bed holds a little longer.
-        let tongue_gate = smoothstep(0.0, 0.05, age) * (1.0 - smoothstep(0.58, 0.88, age));
-        let core_gate = smoothstep(0.0, 0.04, age) * (1.0 - smoothstep(0.70, 1.0, age));
+        let tongue_gate = smoothstep(0.0, 0.10, age) * (1.0 - smoothstep(0.58, 0.88, age));
+        let core_gate = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.70, 1.0, age));
         let width = fire.width * (1.0 + 1.6 * spread);
-        let flicker = 0.70
-            + 0.16 * (now * 19.0 + fire.seed).sin().abs()
-            + 0.14 * (now * 37.0 + fire.seed * 1.7).sin().abs();
+        // Slow, shallow breathe — not a strobe.
+        let flicker = 0.94
+            + 0.04 * (now * 5.5 + fire.seed).sin()
+            + 0.02 * (now * 9.0 + fire.seed * 1.7).sin();
         let lean_rot = (-wind.current * 0.014).clamp(-0.22, 0.22);
         tf.scale = Vec3::ONE;
         tf.rotation = Quat::from_rotation_z(lean_rot);
@@ -2515,36 +2512,17 @@ fn update_grass_fires(
             continue;
         }
 
-        let glow = 4.8 * core_gate * flicker;
+        let glow = 2.6 * core_gate * flicker;
         sprite.color = Color::linear_rgba(glow, glow * 0.26, glow * 0.03, core_gate.max(0.16));
-        sprite.custom_size = Some(Vec2::new(width * 1.75, 7.5 + 5.5 * core_gate * flicker));
+        sprite.custom_size = Some(Vec2::new(width * 1.75, 7.5 + 4.0 * core_gate * flicker));
 
         let origin = tf.translation.truncate();
         let lean = wind.current * 0.45;
 
-        if !fire.ignited {
-            fire.ignited = true;
-            // Ignition pop: a handful of extra core embers so the fire catches.
-            let pop = scale_burst_count(10, &budget);
-            for _ in 0..pop {
-                spawn_fire_core(
-                    &mut budget,
-                    &mut commands,
-                    scene_root,
-                    &tex.0,
-                    &mut rng,
-                    origin,
-                    width,
-                    lean,
-                    1.15,
-                );
-            }
-        }
-
         // Two layers: a tight low core (the surface is on fire) and taller
         // tongues that climb out of it. Spawn from an area, never a point.
         // scale_burst_count never returns 0, so skip it when the layer is idle.
-        let core_n = match emit_count(28.0 * core_gate, dt, &mut rng) {
+        let core_n = match emit_count(24.0 * core_gate, dt, &mut rng) {
             0 => 0,
             n => scale_burst_count(n, &budget),
         };
@@ -2558,10 +2536,9 @@ fn update_grass_fires(
                 origin,
                 width,
                 lean,
-                1.0,
             );
         }
-        let tongue_n = match emit_count(16.0 * tongue_gate, dt, &mut rng) {
+        let tongue_n = match emit_count(14.0 * tongue_gate, dt, &mut rng) {
             0 => 0,
             n => scale_burst_count(n, &budget),
         };
@@ -2577,7 +2554,7 @@ fn update_grass_fires(
                 lean,
             );
         }
-        let ember_n = match emit_count(3.2 * tongue_gate, dt, &mut rng) {
+        let ember_n = match emit_count(1.4 * tongue_gate, dt, &mut rng) {
             0 => 0,
             n => scale_burst_count(n, &budget),
         };
@@ -2613,12 +2590,12 @@ fn update_grass_fires(
 }
 
 fn fire_flame_color(rng: &mut impl Rng) -> Vec3 {
-    if rng.gen_bool(0.35) {
-        Vec3::new(1.0, 0.88, 0.32)
+    if rng.gen_bool(0.45) {
+        Vec3::new(1.0, 0.52, 0.10)
     } else if rng.gen_bool(0.55) {
-        Vec3::new(1.0, 0.48, 0.08)
+        Vec3::new(0.98, 0.32, 0.05)
     } else {
-        Vec3::new(0.95, 0.18, 0.03)
+        Vec3::new(0.90, 0.16, 0.03)
     }
 }
 
@@ -2631,12 +2608,11 @@ fn spawn_fire_core(
     origin: Vec2,
     width: f32,
     lean: f32,
-    bright: f32,
 ) {
     if !budget.can_spawn_spark() {
         return;
     }
-    let life = rng.gen_range(0.16..0.32);
+    let life = rng.gen_range(0.28..0.48);
     spawn_spark_z(
         budget,
         commands,
@@ -2652,7 +2628,7 @@ fn spawn_fire_core(
             gravity_mul: 0.02,
             size: rng.gen_range(2.2..3.8),
             seed: rng.gen_range(0.0..1.0),
-            brightness: rng.gen_range(0.85..1.15) * bright,
+            brightness: rng.gen_range(0.62..0.82),
             is_fire: true,
             ..default()
         },
@@ -2673,7 +2649,7 @@ fn spawn_fire_tongue(
     if !budget.can_spawn_spark() {
         return;
     }
-    let life = rng.gen_range(0.28..0.52);
+    let life = rng.gen_range(0.40..0.68);
     spawn_spark_z(
         budget,
         commands,
@@ -2689,7 +2665,7 @@ fn spawn_fire_tongue(
             gravity_mul: 0.02,
             size: rng.gen_range(2.8..4.8),
             seed: rng.gen_range(0.0..1.0),
-            brightness: rng.gen_range(0.75..1.05),
+            brightness: rng.gen_range(0.55..0.75),
             is_fire: true,
             ..default()
         },
@@ -2724,12 +2700,13 @@ fn spawn_fire_ember(
             ),
             life,
             max_life: life,
-            color: Vec3::new(1.0, 0.42, 0.08),
+            color: Vec3::new(1.0, 0.36, 0.06),
             drag: 1.35,
             gravity_mul: 0.16,
             size: rng.gen_range(0.9..1.5),
             seed: rng.gen_range(0.0..1.0),
-            brightness: rng.gen_range(0.9..1.35),
+            brightness: rng.gen_range(0.48..0.68),
+            is_fire: true,
             ..default()
         },
         8.72,
@@ -2946,19 +2923,16 @@ fn update_sparks(
 /// colored burn, then a dimming orange ember before extinction.
 fn spark_color(spark: &Spark, age: f32, speed: f32, now: f32) -> (Vec3, f32) {
     if spark.is_fire {
-        // Yellow → orange → deep red as the tongue cools. No firework white-hot.
-        let c = if age < 0.28 {
-            spark.color.lerp(Vec3::new(1.0, 0.94, 0.48), 1.0 - age / 0.28)
-        } else if age < 0.62 {
-            spark.color.lerp(Vec3::new(1.0, 0.26, 0.04), (age - 0.28) / 0.34)
+        // Orange → red as the tongue cools. No white-hot flash, no strobe.
+        let c = if age < 0.55 {
+            spark.color.lerp(Vec3::new(0.95, 0.22, 0.04), age / 0.55)
         } else {
-            Vec3::new(1.0, 0.26, 0.04).lerp(Vec3::new(0.40, 0.05, 0.01), (age - 0.62) / 0.38)
+            Vec3::new(0.95, 0.22, 0.04).lerp(Vec3::new(0.40, 0.05, 0.01), (age - 0.55) / 0.45)
         };
-        let mut i = (4.4 * (1.0 - age).powf(0.85) + 0.5) * spark.brightness;
-        let flicker = (now * 29.0 + spark.seed * 80.0).sin()
-            * (now * 47.0 + spark.seed * 33.0).sin();
-        i *= 1.0 + 0.24 * flicker.abs() * (1.0 - age);
-        let fade = 1.0 - smoothstep(0.70, 0.98, age);
+        let mut i = (2.1 + 0.7 * (1.0 - age)) * spark.brightness;
+        let flicker = (now * 7.0 + spark.seed * 40.0).sin();
+        i *= 1.0 + 0.06 * flicker * (1.0 - age);
+        let fade = smoothstep(0.0, 0.16, age) * (1.0 - smoothstep(0.68, 0.98, age));
         return (c * i * fade, fade);
     }
 
@@ -3126,8 +3100,9 @@ fn light_foreground_hills(
         }
         let t = 1.0 - light.life / light.max_life;
         let env = if light.sustain {
+            let rise = smoothstep(0.0, 0.14, t);
             let fade = smoothstep(0.88, 1.0, t);
-            1.25 * (1.0 - fade)
+            1.05 * rise * (1.0 - fade)
         } else if t < 0.08 {
             (t / 0.08) * 1.6
         } else {
