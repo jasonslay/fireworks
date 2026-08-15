@@ -3,8 +3,10 @@
 //! Realism notes:
 //! - Stars are sampled on a 3D sphere and projected to 2D, which produces the
 //!   dense-rimmed look of real shell breaks. Mines are a 5-second ground
-//!   spray of bright yellow stars from a tap on the ground. Flying fish
-//!   are self-propelled fuse pieces that dart and zigzag after a quiet break.
+//!   spray of bright yellow stars from a tap on the ground. Comets are
+//!   large rising stars with a thick spark streamer and no aerial break.
+//!   Flying fish are self-propelled fuse pieces that dart and zigzag
+//!   after a quiet break.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
 //! - HDR rendering + bloom provides the glow; particles use a soft radial
@@ -47,6 +49,8 @@ const DESIGN_CAMERA_Y: f32 = -400.0;
 const MINE_DURATION: f32 = 5.0;
 /// Sodium/charcoal yellow driven hard into HDR so the spray blooms.
 const MINE_YELLOW: Vec3 = Vec3::new(1.0, 0.94, 0.10);
+/// Charcoal streamer gold of a rising comet.
+const COMET_GOLD: Vec3 = Vec3::new(1.0, 0.58, 0.16);
 /// Lift aerial breaks a little so they sit higher in the sky.
 const APEX_BOOST: f32 = 60.0;
 const MIN_BURST_HEIGHT: f32 = 200.0;
@@ -534,6 +538,7 @@ fn apply_scene(
                 (Vec2::new(0.0, 300.0), BurstKind::Crossette, (COLORS[1], COLORS[1])),
                 (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
                 (Vec2::new(80.0, 220.0), BurstKind::FlyingFish, (COLORS[7], COLORS[2])),
+                (Vec2::new(-500.0, 80.0), BurstKind::Comet, (COLORS[2], COLORS[2])),
             ];
             for (pos, kind, palette) in bursts {
                 spawn_burst(
@@ -636,6 +641,7 @@ enum BurstKind {
     Strobe,
     Mine,
     FlyingFish,
+    Comet,
 }
 
 #[derive(Component)]
@@ -1464,14 +1470,15 @@ fn random_palette(rng: &mut ThreadRng) -> (Vec3, Vec3) {
 
 fn random_kind(rng: &mut ThreadRng) -> BurstKind {
     match rng.gen_range(0..100) {
-        0..=20 => BurstKind::Peony,
-        21..=38 => BurstKind::Chrysanthemum,
-        39..=48 => BurstKind::Willow,
-        49..=56 => BurstKind::Palm,
-        57..=64 => BurstKind::Ring,
-        65..=72 => BurstKind::Crossette,
-        73..=84 => BurstKind::Strobe,
-        _ => BurstKind::FlyingFish,
+        0..=18 => BurstKind::Peony,
+        19..=35 => BurstKind::Chrysanthemum,
+        36..=45 => BurstKind::Willow,
+        46..=52 => BurstKind::Palm,
+        53..=60 => BurstKind::Ring,
+        61..=68 => BurstKind::Crossette,
+        69..=79 => BurstKind::Strobe,
+        80..=89 => BurstKind::FlyingFish,
+        _ => BurstKind::Comet,
     }
 }
 
@@ -1480,11 +1487,12 @@ fn launch_finale(
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     rng: &mut ThreadRng,
+    budget: &mut ParticleBudget,
 ) {
     for _ in 0..8 {
         let x = rng.gen_range(-580.0..580.0);
         let apex = rng.gen_range(110.0..490.0);
-        launch_shell(commands, scene, tex, rng, x, apex);
+        launch_shell(commands, scene, tex, rng, budget, x, apex);
     }
 }
 
@@ -1510,6 +1518,7 @@ fn try_launch_at_viewport(
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     rng: &mut ThreadRng,
+    budget: &mut ParticleBudget,
     camera: &Camera,
     cam_tf: &GlobalTransform,
     design_scale: f32,
@@ -1533,7 +1542,7 @@ fn try_launch_at_viewport(
         );
     } else {
         let x = pos.x + rng.gen_range(-15.0..15.0);
-        launch_shell(commands, scene, tex, rng, x, pos.y);
+        launch_shell(commands, scene, tex, rng, budget, x, pos.y);
     }
 }
 
@@ -1542,11 +1551,26 @@ fn launch_shell(
     scene: Option<&SceneRoot>,
     tex: &Handle<Image>,
     rng: &mut ThreadRng,
+    budget: &mut ParticleBudget,
     launch_x: f32,
     apex_y: f32,
 ) {
     let kind = random_kind(rng);
     let palette = random_palette(rng);
+
+    if kind == BurstKind::Comet {
+        spawn_comet(
+            budget,
+            commands,
+            scene,
+            tex,
+            rng,
+            Vec2::new(launch_x, GROUND_Y),
+            apex_y,
+            palette,
+        );
+        return;
+    }
 
     let h = (apex_y + APEX_BOOST - GROUND_Y).max(MIN_BURST_HEIGHT);
     let v0 = (2.0 * -GRAVITY * h).sqrt();
@@ -1578,6 +1602,7 @@ fn auto_launch(
     mut launcher: ResMut<Launcher>,
     tex: Res<ParticleTexture>,
     scene: Option<Res<SceneRoot>>,
+    mut budget: ResMut<ParticleBudget>,
 ) {
     if !launcher.auto {
         return;
@@ -1596,6 +1621,7 @@ fn auto_launch(
             scene.as_deref(),
             &tex.0,
             &mut rng,
+            &mut budget,
             x,
             apex,
         );
@@ -1613,6 +1639,7 @@ fn handle_input(
     mut launcher: ResMut<Launcher>,
     mut overlay: ResMut<FpsOverlay>,
     mut guard: ResMut<PointerGuard>,
+    mut budget: ResMut<ParticleBudget>,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1659,7 +1686,7 @@ fn handle_input(
         }
     }
     if keys.just_pressed(KeyCode::Space) {
-        launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng);
+        launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng, &mut budget);
     }
 
     let camera = camera_q.single().ok();
@@ -1667,13 +1694,14 @@ fn handle_input(
     if touches.any_just_pressed() {
         if let Some((camera, cam_tf)) = camera {
             if touches.iter().count() >= 2 {
-                launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng);
+                launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng, &mut budget);
             } else if let Some(touch) = touches.iter_just_pressed().next() {
                 try_launch_at_viewport(
                     &mut commands,
                     scene.as_deref(),
                     &tex.0,
                     &mut rng,
+                    &mut budget,
                     camera,
                     cam_tf,
                     design_scale,
@@ -1694,6 +1722,7 @@ fn handle_input(
                 scene.as_deref(),
                 &tex.0,
                 &mut rng,
+                &mut budget,
                 camera,
                 cam_tf,
                 design_scale,
@@ -1895,6 +1924,10 @@ fn spawn_burst(
 ) {
     if kind == BurstKind::Mine {
         spawn_mine_spray(commands, scene, tex, rng, pos);
+        return;
+    }
+    if kind == BurstKind::Comet {
+        spawn_comet(budget, commands, scene, tex, rng, pos, pos.y + 240.0, pal);
         return;
     }
 
@@ -2175,7 +2208,7 @@ fn spawn_burst(
                 );
             }
         }
-        BurstKind::Mine => {}
+        BurstKind::Mine | BurstKind::Comet => {}
         BurstKind::FlyingFish => {
             // Quiet break of self-propelled fuse pieces that dart and zigzag
             // like a school of fish dispersing.
@@ -2221,6 +2254,122 @@ fn spawn_burst(
                         turn: rng.gen_range(-0.98..0.98),
                         ..default()
                     },
+                );
+            }
+        }
+    }
+}
+
+/// A comet is a large star fired from the ground that leaves a thick
+/// charcoal or glitter streamer and burns out at the top — no spherical
+/// break. A few launches are a tight volley; some fork like a crossette.
+fn spawn_comet(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    apex_y: f32,
+    pal: (Vec3, Vec3),
+) {
+    let n = match rng.gen_range(0..100) {
+        0..=71 => 1,
+        72..=92 => 2,
+        _ => 3,
+    };
+    let gravity_mul = 0.74;
+    let h = (apex_y + APEX_BOOST - origin.y).max(MIN_BURST_HEIGHT);
+    let v0 = (2.0 * -GRAVITY * gravity_mul * h).sqrt();
+    let spread = rng.gen_range(0.055..0.12);
+    let crossette = rng.gen_bool(0.18);
+    let glitter = Vec3::new(1.0, 0.78, 0.22);
+    let silver = Vec3::new(0.92, 0.94, 1.0);
+
+    if origin.y <= GROUND_Y + 40.0 {
+        spawn_flash(
+            budget,
+            commands,
+            scene,
+            tex,
+            origin + Vec2::new(0.0, 8.0),
+            rng.gen_range(70.0..110.0),
+            0.10,
+            COMET_GOLD,
+        );
+    }
+
+    let light_life = rng.gen_range(1.8..2.4);
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Transform::from_xyz(origin.x, origin.y.max(GROUND_Y + 20.0), 0.0),
+        BurstLight {
+            life: light_life,
+            max_life: light_life,
+            color: COMET_GOLD * 0.7 + Vec3::splat(0.2),
+            sustain: false,
+        },
+        ),
+    );
+
+    for _ in 0..n {
+        let color = match rng.gen_range(0..10) {
+            0..=4 => COMET_GOLD,
+            5..=6 => glitter,
+            7 => silver,
+            _ => pal.0,
+        };
+        let dir = mine_dir(rng, spread);
+        let speed = v0 * rng.gen_range(0.94..1.06);
+        let t_apex = speed / (-GRAVITY * gravity_mul);
+        let life = (t_apex * rng.gen_range(0.84..1.04)).clamp(1.4, 3.2);
+        let size = rng.gen_range(6.5..8.8);
+        spawn_spark(
+            budget,
+            commands,
+            scene,
+            tex,
+            origin,
+            Spark {
+                vel: dir * speed,
+                life,
+                max_life: life,
+                color,
+                drag: rng.gen_range(0.82..1.20),
+                gravity_mul,
+                size,
+                trail_interval: rng.gen_range(0.010..0.016),
+                trail_life: rng.gen_range(0.62..0.92),
+                split_at: if crossette {
+                    rng.gen_range(0.56..0.70)
+                } else {
+                    0.0
+                },
+                seed: rng.gen_range(0.0..1.0),
+                brightness: rng.gen_range(1.55..2.25),
+                ..default()
+            },
+        );
+
+        // Seed a streamer behind a mid-air comet so stills and the first
+        // frames already show the trail, not just the head.
+        if origin.y > GROUND_Y + 60.0 {
+            let back = -dir * 16.0;
+            for i in 1..=10 {
+                let t = i as f32;
+                spawn_trail_bit(
+                    budget,
+                    commands,
+                    scene,
+                    tex,
+                    origin + back * t
+                        + Vec2::new(rng.gen_range(-2.0..2.0), rng.gen_range(-2.0..2.0)),
+                    dir * speed * 0.05,
+                    color,
+                    rng.gen_range(0.35..0.7),
+                    size * rng.gen_range(0.45..0.75),
                 );
             }
         }
@@ -2422,8 +2571,15 @@ fn update_sparks(
                         max_life: life,
                         color: spark.color,
                         drag: 1.8,
-                        size: 2.6,
+                        size: if spark.trail_interval > 0.0 { 3.6 } else { 2.6 },
+                        trail_interval: if spark.trail_interval > 0.0 {
+                            0.024
+                        } else {
+                            0.0
+                        },
+                        trail_life: 0.38,
                         seed: rng.gen_range(0.0..1.0),
+                        brightness: spark.brightness.max(1.0),
                         ..default()
                     },
                 );
