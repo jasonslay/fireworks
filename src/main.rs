@@ -564,6 +564,10 @@ fn apply_scene(
 #[derive(Resource)]
 struct ParticleTexture(Handle<Image>);
 
+/// Flatter blob for grass fire. The spark texture's tight hot core sparkles.
+#[derive(Resource)]
+struct GrassFireTexture(Handle<Image>);
+
 #[derive(Resource)]
 struct Launcher {
     timer: Timer,
@@ -928,6 +932,8 @@ fn setup(
     let scene = scene.as_deref();
     let tex = images.add(make_radial_texture(48));
     commands.insert_resource(ParticleTexture(tex.clone()));
+    let fire_tex = images.add(make_fire_texture(64));
+    commands.insert_resource(GrassFireTexture(fire_tex));
 
     let mut rng = thread_rng();
 
@@ -1421,6 +1427,33 @@ fn make_moon_texture(size: u32) -> Image {
         }
     }
 
+    Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// Soft flame blob with no pinprick core, so the grass fire does not sparkle.
+fn make_fire_texture(size: u32) -> Image {
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    let half = (size as f32 - 1.0) / 2.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 - half) / half;
+            let dy = (y as f32 - half) / half;
+            let d = (dx * dx + dy * dy).sqrt().min(1.0);
+            let a = (1.0 - d * d).clamp(0.0, 1.0).powf(1.2);
+            let a8 = (a * 255.0) as u8;
+            data.extend_from_slice(&[255, 255, 255, a8]);
+        }
+    }
     Image::new(
         Extent3d {
             width: size,
@@ -2480,14 +2513,11 @@ fn spawn_grass_fire(
         },
     );
 
-    // A few long-lived tongues make a flame body. Short HDR sparks cannot —
-    // they appear, clip to white, and vanish, which reads as flashing.
+    // Three wide tongues, not a cluster of hot pinpricks.
     let tongues = [
-        (0.0, 38.0, 13.0, 8.70),
-        (-0.32, 28.0, 11.0, 8.69),
-        (0.30, 26.0, 10.5, 8.71),
-        (-0.58, 18.0, 8.5, 8.68),
-        (0.55, 17.0, 8.0, 8.72),
+        (0.0, 34.0, 18.0, 8.70),
+        (-0.30, 24.0, 15.0, 8.69),
+        (0.28, 22.0, 14.0, 8.71),
     ];
     for (i, (x_mul, base_h, base_w, z)) in tongues.into_iter().enumerate() {
         let x_off = x_mul * width;
@@ -2498,7 +2528,7 @@ fn spawn_grass_fire(
             pos + Vec2::new(x_off, base_h * 0.38),
             z,
             Vec2::new(base_w, base_h),
-            Color::linear_rgba(1.25, 0.34, 0.05, 0.88),
+            Color::linear_rgba(1.05, 0.28, 0.04, 0.82),
             GrassFire {
                 life,
                 max_life: life,
@@ -2528,21 +2558,15 @@ fn spawn_grass_fire(
     );
 }
 
-/// How many particles a rate-per-second should emit this frame.
 fn update_grass_fires(
     mut commands: Commands,
     time: Res<Time>,
     wind: Res<Wind>,
-    tex: Res<ParticleTexture>,
-    scene: Option<Res<SceneRoot>>,
-    mut budget: ResMut<ParticleBudget>,
     mut fires: Query<(Entity, &mut GrassFire, &mut Transform, &mut Sprite)>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    let mut rng = thread_rng();
-    let scene_root = scene.as_deref();
-    let wind_lean = (-wind.current * 0.016).clamp(-0.24, 0.24);
+    let wind_lean = (-wind.current * 0.012).clamp(-0.18, 0.18);
 
     for (entity, mut fire, mut tf, mut sprite) in &mut fires {
         fire.life -= dt;
@@ -2553,11 +2577,10 @@ fn update_grass_fires(
 
         let age = (1.0 - fire.life / fire.max_life).clamp(0.0, 1.0);
         let spread = smoothstep(0.0, 0.4, age) * (1.0 - smoothstep(0.62, 1.0, age));
-        let gate = smoothstep(0.0, 0.16, age) * (1.0 - smoothstep(0.74, 1.0, age));
-        let width = fire.width * (1.0 + 1.35 * spread);
-        // Slow breathe only — high-frequency abs(sin) is what made the old fire strobe.
-        let breathe = (now * 2.6 + fire.phase).sin();
-        let sway = (now * 1.9 + fire.phase * 1.3).sin();
+        let gate = smoothstep(0.0, 0.18, age) * (1.0 - smoothstep(0.76, 1.0, age));
+        let width = fire.width * (1.0 + 1.2 * spread);
+        // Very slow heat pulse. Do not resize or slide the sprites — that sparkles.
+        let breathe = (now * 1.15 + fire.phase).sin();
         tf.scale = Vec3::ONE;
 
         match fire.kind {
@@ -2569,65 +2592,38 @@ fn update_grass_fires(
                     0.012 * stain,
                     (0.64 * stain).max(0.18),
                 );
-                sprite.custom_size = Some(Vec2::new(width * 3.1, 9.0 + 2.5 * stain));
+                sprite.custom_size = Some(Vec2::new(width * 3.1, fire.base_h));
                 tf.translation.x = fire.origin.x;
                 tf.translation.y = fire.origin.y - 2.0;
-                tf.rotation = Quat::from_rotation_z(wind_lean * 0.4);
+                tf.rotation = Quat::from_rotation_z(wind_lean * 0.35);
             }
             GrassFireKind::Coal => {
-                // Keep green/blue low so overlapping sprites stay orange, not white.
-                let heat = (0.95 + 0.08 * breathe) * gate;
-                sprite.color = Color::linear_rgba(1.15 * heat, 0.22 * heat, 0.035 * heat, 0.9 * gate.max(0.2));
-                sprite.custom_size = Some(Vec2::new(width * 2.15, 10.0 + 3.0 * gate));
+                let heat = (0.94 + 0.04 * breathe) * gate;
+                sprite.color = Color::linear_rgba(
+                    1.02 * heat,
+                    0.22 * heat,
+                    0.035 * heat,
+                    0.88 * gate.max(0.2),
+                );
+                sprite.custom_size = Some(Vec2::new(width * 2.15, fire.base_h));
                 tf.translation.x = fire.origin.x;
                 tf.translation.y = fire.origin.y;
-                tf.rotation = Quat::from_rotation_z(wind_lean * 0.5);
-
-                if gate > 0.25 && rng.gen_range(0.0..1.0) < 3.0 * dt && budget.can_spawn_spark() {
-                    let life = rng.gen_range(1.0..1.8);
-                    spawn_spark_z(
-                        &mut budget,
-                        &mut commands,
-                        scene_root,
-                        &tex.0,
-                        fire.origin
-                            + Vec2::new(rng.gen_range(-width * 0.55..width * 0.55), rng.gen_range(10.0..18.0)),
-                        Spark {
-                            vel: Vec2::new(
-                                wind.current * 0.4 + rng.gen_range(-6.0..6.0),
-                                rng.gen_range(8.0..18.0),
-                            ),
-                            life,
-                            max_life: life,
-                            color: Vec3::new(0.18, 0.16, 0.14),
-                            drag: 0.85,
-                            gravity_mul: 0.03,
-                            size: rng.gen_range(4.2..7.0),
-                            seed: rng.gen_range(0.0..1.0),
-                            brightness: 0.12,
-                            ..default()
-                        },
-                        8.55,
-                    );
-                }
+                tf.rotation = Quat::from_rotation_z(wind_lean * 0.4);
             }
             GrassFireKind::Tongue => {
-                let h = fire.base_h * (0.86 + 0.14 * breathe) * (0.55 + 0.45 * gate);
-                let w = fire.base_w * (0.90 + 0.10 * -breathe) * (0.7 + 0.3 * spread.max(0.35));
-                let x = fire.origin.x + fire.x_off * (1.0 + 0.35 * spread) + sway * 2.2 + wind.current * 0.35;
-                let y = fire.origin.y + h * 0.40;
-                tf.translation.x = x;
-                tf.translation.y = y;
-                tf.rotation = Quat::from_rotation_z(wind_lean + sway * 0.07);
-                sprite.custom_size = Some(Vec2::new(w.max(4.0), h.max(6.0)));
-                // Orange only: R can sit a bit over 1, G/B stay well below so
-                // the web build cannot clip the sprite to a white flash.
-                let heat = (0.88 + 0.10 * breathe) * gate;
+                tf.translation.x = fire.origin.x + fire.x_off * (1.0 + 0.2 * spread);
+                tf.translation.y = fire.origin.y + fire.base_h * 0.40;
+                tf.rotation = Quat::from_rotation_z(wind_lean);
+                sprite.custom_size = Some(Vec2::new(
+                    fire.base_w * (1.0 + 0.15 * spread),
+                    fire.base_h,
+                ));
+                let heat = (0.90 + 0.04 * breathe) * gate;
                 sprite.color = Color::linear_rgba(
-                    1.28 * heat,
-                    0.32 * heat,
-                    0.045 * heat,
-                    (0.86 * gate).max(0.12),
+                    1.06 * heat,
+                    0.28 * heat,
+                    0.04 * heat,
+                    (0.80 * gate).max(0.10),
                 );
             }
         }
@@ -2643,6 +2639,7 @@ fn update_sparks(
     time: Res<Time>,
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
+    fire_tex: Res<GrassFireTexture>,
     scene: Option<Res<SceneRoot>>,
     hills: Option<Res<FgHillsLighting>>,
     mut budget: ResMut<ParticleBudget>,
@@ -2779,7 +2776,7 @@ fn update_sparks(
             ignite_grass(
                 &mut commands,
                 scene.as_deref(),
-                &tex.0,
+                &fire_tex.0,
                 &mut rng,
                 hills,
                 &mut fires,
