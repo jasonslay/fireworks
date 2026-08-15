@@ -10,7 +10,7 @@ The scene is a moonlit night over the Front Range of Colorado —
 distant peaks with snowfields, dark hogback foothills, and foreground hills that
 catch light from each burst. Shells launch from the valley floor behind the near
 ridgeline; rising tails and falling embers appear and disappear around it.
-Mines spray bright yellow stars from the valley floor for five seconds.
+Tap the ground to fire a mine — a five-second spray of bright yellow stars.
 Flying fish dart and zigzag after a quiet aerial break, like a school dispersing.
 
 ## Requirements
@@ -156,7 +156,7 @@ zipping.
 
 | Input | Action |
 |-------|--------|
-| Left click | Launch a shell that bursts at the clicked point |
+| Left click / tap | Launch a shell at that point, or a mine if you hit the ground |
 | Space | Finale salvo (8 shells at once) |
 | A | Toggle automatic launching (on by default) |
 | F | Toggle FPS overlay (top-left corner) |
@@ -175,8 +175,8 @@ horizon rather than stretching the composition.
   barium green, copper blue, sodium gold, magnesium silver), with white-hot
   ignition fading through the star's color into a dim orange ember.
 - **Nine shell types** – peony, chrysanthemum, willow, palm, ring, crossette
-  (stars that split mid-flight), strobe, mine (a 5-second ground spray of
-  very bright yellow stars), and flying fish (self-propelled fuse pieces
+  (stars that split mid-flight), strobe, mine (tap the ground for a 5-second
+  spray of very bright yellow stars), and flying fish (self-propelled fuse pieces
   that dart and zigzag like a school dispersing).
 - **Physics** – gravity, per-star aerodynamic drag, and a slowly wandering wind.
 - **HDR + bloom** – particles render at HDR intensities through a soft radial
