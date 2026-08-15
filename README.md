@@ -14,7 +14,8 @@ Tap the ground to fire a mine — a five-second spray of bright yellow stars.
 Comets climb as large stars with a thick spark streamer and burn out at the
 top, with no aerial break. Flying fish dart and zigzag after a quiet aerial
 break, like a school dispersing. Bees break into a dense gold swarm that mills
-and crackles, like a hive spilling into the sky.
+and crackles, like a hive spilling into the sky. Spinners corkscrew upward
+in a spiral of sparks and often spray at the top.
 
 ## Requirements
 
@@ -177,12 +178,14 @@ horizon rather than stretching the composition.
 - **Pyrotechnic colors** – palettes based on real emitters (strontium red,
   barium green, copper blue, sodium gold, magnesium silver), with white-hot
   ignition fading through the star's color into a dim orange ember.
-- **Eleven shell types** – peony, chrysanthemum, willow, palm, ring, crossette
+- **Twelve shell types** – peony, chrysanthemum, willow, palm, ring, crossette
   (stars that split mid-flight), strobe, mine (tap the ground for a 5-second
   spray of very bright yellow stars), flying fish (self-propelled fuse pieces
   that dart and zigzag like a school dispersing), comet (a large rising
   star with a thick spark streamer and no aerial break; some fork at the top),
-  and bees (a dense gold swarm that mills and crackles after the break).
+  bees (a dense gold swarm that mills and crackles after the break), and
+  spinner (a tourbillion that corkscrews up in a spiral of sparks and often
+  sprays at the top).
 - **Physics** – gravity, per-star aerodynamic drag, and a slowly wandering wind.
 - **HDR + bloom** – particles render at HDR intensities through a soft radial
   texture and a bloom pass, so bright stars genuinely glow.

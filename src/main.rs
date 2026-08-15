@@ -7,7 +7,9 @@
 //!   large rising stars with a thick spark streamer and no aerial break.
 //!   Flying fish are self-propelled fuse pieces that dart and zigzag
 //!   after a quiet break. Bees are a dense gold swarm that mills and
-//!   crackles after the break, like a hive spilling into the sky.
+//!   crackles after the break, like a hive spilling into the sky. Spinners
+//!   (tourbillions) corkscrew upward in a spiral of sparks and often spray
+//!   at the top.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
 //! - HDR rendering + bloom provides the glow; particles use a soft radial
@@ -540,6 +542,7 @@ fn apply_scene(
                 (Vec2::new(80.0, 220.0), BurstKind::FlyingFish, (COLORS[7], COLORS[2])),
                 (Vec2::new(-500.0, 80.0), BurstKind::Comet, (COLORS[2], COLORS[2])),
                 (Vec2::new(420.0, 150.0), BurstKind::Bees, (COLORS[2], COLORS[1])),
+                (Vec2::new(-180.0, 50.0), BurstKind::Spinner, (COLORS[7], COLORS[2])),
             ];
             for (pos, kind, palette) in bursts {
                 spawn_burst(
@@ -644,6 +647,7 @@ enum BurstKind {
     FlyingFish,
     Comet,
     Bees,
+    Spinner,
 }
 
 #[derive(Component)]
@@ -1479,8 +1483,9 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
         53..=60 => BurstKind::Ring,
         61..=68 => BurstKind::Crossette,
         69..=77 => BurstKind::Strobe,
-        78..=85 => BurstKind::FlyingFish,
-        86..=93 => BurstKind::Bees,
+        78..=84 => BurstKind::FlyingFish,
+        85..=90 => BurstKind::Bees,
+        91..=95 => BurstKind::Spinner,
         _ => BurstKind::Comet,
     }
 }
@@ -1601,6 +1606,19 @@ fn launch_shell(
 
     if kind == BurstKind::Comet {
         spawn_comet(
+            budget,
+            commands,
+            scene,
+            tex,
+            rng,
+            Vec2::new(launch_x, GROUND_Y),
+            apex_y,
+            palette,
+        );
+        return;
+    }
+    if kind == BurstKind::Spinner {
+        spawn_spinner(
             budget,
             commands,
             scene,
@@ -1966,6 +1984,10 @@ fn spawn_burst(
         spawn_comet(budget, commands, scene, tex, rng, pos, pos.y + 240.0, pal);
         return;
     }
+    if kind == BurstKind::Spinner {
+        spawn_spinner(budget, commands, scene, tex, rng, pos, pos.y + 240.0, pal);
+        return;
+    }
 
     // The initial detonation flash that briefly lights the sky.
     // Flying fish are a quiet break — a soft pop, then the school swims off.
@@ -2260,7 +2282,7 @@ fn spawn_burst(
                 );
             }
         }
-        BurstKind::Mine | BurstKind::Comet => {}
+        BurstKind::Mine | BurstKind::Comet | BurstKind::Spinner => {}
         BurstKind::FlyingFish => {
             // Quiet break of self-propelled fuse pieces that dart and zigzag
             // like a school of fish dispersing.
@@ -2483,6 +2505,127 @@ fn spawn_comet(
     }
 }
 
+/// A spinner (tourbillion) corkscrews up from the ground in a spiral of
+/// sparks. Most finish with a spray at the top, like the powder wall
+/// between the spin holes breaking through.
+fn spawn_spinner(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    apex_y: f32,
+    pal: (Vec3, Vec3),
+) {
+    let n = if rng.gen_bool(0.28) { 2 } else { 1 };
+    let gravity_mul = 0.62;
+    let silver = Vec3::new(0.92, 0.94, 1.0);
+    let glitter = Vec3::new(1.0, 0.78, 0.22);
+    const APEX_AGE: f32 = 0.66;
+
+    if origin.y <= GROUND_Y + 40.0 {
+        spawn_flash(
+            budget,
+            commands,
+            scene,
+            tex,
+            origin + Vec2::new(0.0, 8.0),
+            rng.gen_range(55.0..90.0),
+            0.09,
+            COMET_GOLD,
+        );
+    }
+
+    let light_life = rng.gen_range(2.8..4.2);
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Transform::from_xyz(origin.x, origin.y.max(GROUND_Y + 20.0), 0.0),
+        BurstLight {
+            life: light_life,
+            max_life: light_life,
+            color: COMET_GOLD * 0.65 + Vec3::splat(0.2),
+            sustain: false,
+        },
+        ),
+    );
+
+    for i in 0..n {
+        let color = match rng.gen_range(0..10) {
+            0..=4 => COMET_GOLD,
+            5..=6 => glitter,
+            7..=8 => silver,
+            _ => pal.0,
+        };
+        let drag = rng.gen_range(0.55..0.85);
+        let (vy, t_apex) = speed_for_apex(origin.y, apex_y, drag, gravity_mul);
+        // Ballistics plus corkscrew thrust; keep initial speed down so the
+        // helix has time to read before the top.
+        let vy = vy * rng.gen_range(0.42..0.55);
+        let x_off = if n == 1 {
+            rng.gen_range(-8.0..8.0)
+        } else {
+            (if i == 0 { -18.0 } else { 18.0 }) + rng.gen_range(-6.0..6.0)
+        };
+        let start = origin + Vec2::new(x_off, 0.0);
+        let life = (t_apex / APEX_AGE * rng.gen_range(0.95..1.08)).clamp(1.4, 7.5);
+        let size = rng.gen_range(5.8..7.6);
+        let spin_sign = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+        spawn_spark(
+            budget,
+            commands,
+            scene,
+            tex,
+            start,
+            Spark {
+                vel: Vec2::new(rng.gen_range(-30.0..30.0), vy),
+                life,
+                max_life: life,
+                color,
+                drag,
+                gravity_mul,
+                size,
+                trail_interval: rng.gen_range(0.009..0.014),
+                trail_life: rng.gen_range(0.55..0.82),
+                split_at: if rng.gen_bool(0.82) {
+                    rng.gen_range(0.68..0.78)
+                } else {
+                    0.0
+                },
+                seed: rng.gen_range(0.0..1.0),
+                brightness: rng.gen_range(1.5..2.15),
+                thrust: rng.gen_range(240.0..360.0),
+                heading: std::f32::consts::FRAC_PI_2 + rng.gen_range(-0.12..0.12),
+                wiggle_hz: spin_sign * rng.gen_range(3.6..6.4),
+                wiggle_amp: rng.gen_range(0.78..1.22),
+                turn: spin_sign * rng.gen_range(0.08..0.22),
+                ..default()
+            },
+        );
+
+        if origin.y > GROUND_Y + 60.0 {
+            for k in 1..=12 {
+                let t = k as f32;
+                let a = t * 0.55;
+                spawn_trail_bit(
+                    budget,
+                    commands,
+                    scene,
+                    tex,
+                    start + Vec2::new(a.sin() * 10.0, -t * 14.0)
+                        + Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5)),
+                    Vec2::new(a.cos() * 20.0, vy * 0.04),
+                    color,
+                    rng.gen_range(0.3..0.6),
+                    size * rng.gen_range(0.4..0.7),
+                );
+            }
+        }
+    }
+}
+
 fn spawn_mine_spray(
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
@@ -2649,10 +2792,48 @@ fn update_sparks(
         let age = 1.0 - spark.life / spark.max_life;
         let speed = spark.vel.length();
 
-        // Crossette break, or a bee crackle pop (self-propelled star).
+        // Crossette break, bee crackle, or a spinner's burnout spray.
         if spark.split_at > 0.0 && age >= spark.split_at {
             let pos = tf.translation.truncate();
-            if spark.thrust > 0.0 {
+            if spark.thrust > 0.0 && spark.size >= 5.0 {
+                spawn_flash(
+                    &mut budget,
+                    &mut commands,
+                    scene.as_deref(),
+                    &tex.0,
+                    pos,
+                    rng.gen_range(90.0..140.0),
+                    0.12,
+                    spark.color,
+                );
+                let bits = rng.gen_range(14..22);
+                for _ in 0..bits {
+                    let life = rng.gen_range(0.45..0.85);
+                    spawn_spark(
+                        &mut budget,
+                        &mut commands,
+                        scene.as_deref(),
+                        &tex.0,
+                        pos,
+                        Spark {
+                            vel: spark.vel * 0.25
+                                + Vec2::from_angle(rng.gen_range(0.0..TAU))
+                                    * rng.gen_range(70.0..170.0),
+                            life,
+                            max_life: life,
+                            color: spark.color,
+                            drag: rng.gen_range(1.5..2.1),
+                            gravity_mul: 0.55,
+                            size: rng.gen_range(2.2..3.4),
+                            trail_interval: 0.028,
+                            trail_life: 0.32,
+                            seed: rng.gen_range(0.0..1.0),
+                            brightness: rng.gen_range(1.2..1.7),
+                            ..default()
+                        },
+                    );
+                }
+            } else if spark.thrust > 0.0 {
                 let crackle = Vec3::new(0.95, 0.92, 0.78);
                 spawn_flash(
                     &mut budget,
