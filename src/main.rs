@@ -2585,8 +2585,8 @@ fn spawn_spinner(
                 drag,
                 gravity_mul,
                 size,
-                trail_interval: rng.gen_range(0.008..0.012),
-                trail_life: rng.gen_range(0.58..0.88),
+                trail_interval: rng.gen_range(0.006..0.010),
+                trail_life: rng.gen_range(0.70..1.05),
                 split_at: if rng.gen_bool(0.82) {
                     rng.gen_range(0.68..0.78)
                 } else {
@@ -2921,7 +2921,9 @@ fn update_sparks(
         // Trails — stop once the star dims; cap to one spawn per frame so hitches
         // don't clump trail bits at a single point. Flying fish keep a tail
         // almost until they burn out — the trail is the swimming body.
-        let trail_until = if spark.thrust > 0.0 {
+        let trail_until = if spark.thrust > 0.0 && spark.size >= 5.5 {
+            0.90
+        } else if spark.thrust > 0.0 {
             0.82
         } else if spark.size >= 6.0 && spark.trail_interval > 0.0 {
             // Comet heads keep the streamer through apogee.
@@ -2935,27 +2937,84 @@ fn update_sparks(
             spark.trail_timer -= dt;
             if spark.trail_timer <= 0.0 {
                 spark.trail_timer += spark.trail_interval;
-                if budget.can_spawn_trail() {
-                    let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
-                    // Spinners draw a helix around the climb, not just a
-                    // streamer on the head.
-                    let helix = if spark.thrust > 0.0
-                        && spark.size >= 5.5
-                        && spark.wiggle_amp >= 0.35
-                    {
-                        let phase = now * spark.wiggle_hz * TAU + spark.seed * TAU;
-                        let along = spark.vel.normalize_or_zero();
-                        let perp = Vec2::new(-along.y, along.x);
-                        perp * phase.sin() * (spark.size * 2.2)
-                    } else {
-                        Vec2::ZERO
-                    };
+                let pos = tf.translation.truncate();
+                let is_spinner = spark.thrust > 0.0
+                    && spark.size >= 5.5
+                    && spark.wiggle_amp >= 0.35;
+                if is_spinner {
+                    let phase = now * spark.wiggle_hz * TAU + spark.seed * TAU;
+                    let along = spark.vel.normalize_or_zero();
+                    let perp = Vec2::new(-along.y, along.x);
+                    let radius = spark.size * 2.4;
+                    let helix = perp * phase.sin() * radius;
+                    // Both spin nozzles, plus loose sparks flung off the rim.
+                    for &offset in &[helix, -helix] {
+                        spawn_trail_bit(
+                            &mut budget,
+                            &mut commands,
+                            scene.as_deref(),
+                            &tex.0,
+                            pos + offset
+                                + Vec2::new(
+                                    rng.gen_range(-2.2..2.2),
+                                    rng.gen_range(-2.2..2.2),
+                                ),
+                            spark.vel * 0.08 + perp * phase.cos() * rng.gen_range(18.0..42.0),
+                            spark.color,
+                            spark.trail_life * rng.gen_range(0.85..1.35),
+                            spark.size * rng.gen_range(0.55..0.85),
+                        );
+                    }
                     spawn_trail_bit(
                         &mut budget,
                         &mut commands,
                         scene.as_deref(),
                         &tex.0,
-                        tf.translation.truncate() + jitter + helix,
+                        pos + Vec2::new(
+                            rng.gen_range(-6.0..6.0),
+                            rng.gen_range(-8.0..2.0),
+                        ),
+                        spark.vel * 0.04
+                            + Vec2::new(
+                                rng.gen_range(-40.0..40.0),
+                                rng.gen_range(-50.0..10.0),
+                            ),
+                        spark.color,
+                        spark.trail_life * rng.gen_range(0.9..1.45),
+                        spark.size * rng.gen_range(0.35..0.6),
+                    );
+                    if rng.gen_bool(0.55) && budget.can_spawn_spark() {
+                        let fling = perp * phase.cos() * rng.gen_range(70.0..140.0)
+                            + along * rng.gen_range(-20.0..30.0);
+                        let life = rng.gen_range(0.28..0.55);
+                        spawn_spark(
+                            &mut budget,
+                            &mut commands,
+                            scene.as_deref(),
+                            &tex.0,
+                            pos + helix * 0.6,
+                            Spark {
+                                vel: spark.vel * 0.15 + fling,
+                                life,
+                                max_life: life,
+                                color: spark.color,
+                                drag: rng.gen_range(1.6..2.3),
+                                gravity_mul: 0.7,
+                                size: rng.gen_range(1.6..2.6),
+                                seed: rng.gen_range(0.0..1.0),
+                                brightness: rng.gen_range(1.1..1.7),
+                                ..default()
+                            },
+                        );
+                    }
+                } else if budget.can_spawn_trail() {
+                    let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
+                    spawn_trail_bit(
+                        &mut budget,
+                        &mut commands,
+                        scene.as_deref(),
+                        &tex.0,
+                        pos + jitter,
                         spark.vel * 0.06,
                         spark.color,
                         spark.trail_life * rng.gen_range(0.7..1.3),
