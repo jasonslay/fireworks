@@ -6,7 +6,8 @@
 //!   spray of bright yellow stars from a tap on the ground. Comets are
 //!   large rising stars with a thick spark streamer and no aerial break.
 //!   Flying fish are self-propelled fuse pieces that dart and zigzag
-//!   after a quiet break.
+//!   after a quiet break. Bees are a dense gold swarm that mills and
+//!   crackles after the break, like a hive spilling into the sky.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
 //! - HDR rendering + bloom provides the glow; particles use a soft radial
@@ -538,6 +539,7 @@ fn apply_scene(
                 (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
                 (Vec2::new(80.0, 220.0), BurstKind::FlyingFish, (COLORS[7], COLORS[2])),
                 (Vec2::new(-500.0, 80.0), BurstKind::Comet, (COLORS[2], COLORS[2])),
+                (Vec2::new(420.0, 150.0), BurstKind::Bees, (COLORS[2], COLORS[1])),
             ];
             for (pos, kind, palette) in bursts {
                 spawn_burst(
@@ -641,6 +643,7 @@ enum BurstKind {
     Mine,
     FlyingFish,
     Comet,
+    Bees,
 }
 
 #[derive(Component)]
@@ -1475,8 +1478,9 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
         46..=52 => BurstKind::Palm,
         53..=60 => BurstKind::Ring,
         61..=68 => BurstKind::Crossette,
-        69..=79 => BurstKind::Strobe,
-        80..=89 => BurstKind::FlyingFish,
+        69..=77 => BurstKind::Strobe,
+        78..=85 => BurstKind::FlyingFish,
+        86..=93 => BurstKind::Bees,
         _ => BurstKind::Comet,
     }
 }
@@ -1965,7 +1969,9 @@ fn spawn_burst(
 
     // The initial detonation flash that briefly lights the sky.
     // Flying fish are a quiet break — a soft pop, then the school swims off.
+    // Bees are a slightly fuller pop, then the swarm spills out.
     let is_fish = kind == BurstKind::FlyingFish;
+    let is_bees = kind == BurstKind::Bees;
     let flash_color = pal.0 * 0.4 + Vec3::splat(0.6);
     spawn_flash(
         budget,
@@ -1975,15 +1981,29 @@ fn spawn_burst(
         pos,
         if is_fish {
             rng.gen_range(110.0..170.0)
+        } else if is_bees {
+            rng.gen_range(140.0..200.0)
         } else {
             rng.gen_range(220.0..340.0)
         },
-        if is_fish { 0.11 } else { 0.17 },
+        if is_fish {
+            0.11
+        } else if is_bees {
+            0.13
+        } else {
+            0.17
+        },
         flash_color,
     );
 
     // Invisible light that tints the foreground hills while the stars burn.
-    let light_life = if is_fish { 1.5 } else { 1.9 };
+    let light_life = if is_fish {
+        1.5
+    } else if is_bees {
+        1.7
+    } else {
+        1.9
+    };
     spawn_in_scene(
         commands,
         scene,
@@ -2289,6 +2309,56 @@ fn spawn_burst(
                 );
             }
         }
+        BurstKind::Bees => {
+            // Dense gold swarm that mills in place and crackles, like a
+            // hive spilling into the sky — not a startled school of fish.
+            let n = scale_burst_count(rng.gen_range(52..78), budget);
+            let honey = Vec3::new(1.0, 0.78, 0.12);
+            let amber = Vec3::new(1.0, 0.52, 0.08);
+            let charcoal = Vec3::new(0.95, 0.62, 0.16);
+            for _ in 0..n {
+                let dir = shell_dir(rng);
+                let heading = rng.gen_range(0.0..TAU);
+                let life = rng.gen_range(1.5..2.2);
+                let color = match rng.gen_range(0..10) {
+                    0..=4 => honey,
+                    5..=7 => amber,
+                    8 => charcoal,
+                    _ => pal.0 * 0.55 + honey * 0.45,
+                };
+                spawn_spark(
+                    budget,
+                    commands,
+                    scene,
+                    tex,
+                    pos,
+                    Spark {
+                        vel: dir * rng.gen_range(28.0..72.0),
+                        life,
+                        max_life: life,
+                        color,
+                        drag: rng.gen_range(1.85..2.45),
+                        gravity_mul: 0.24,
+                        size: rng.gen_range(2.0..3.1),
+                        trail_interval: 0.014,
+                        trail_life: 0.28,
+                        split_at: if rng.gen_bool(0.42) {
+                            rng.gen_range(0.32..0.78)
+                        } else {
+                            0.0
+                        },
+                        seed: rng.gen_range(0.0..1.0),
+                        brightness: rng.gen_range(1.15..1.65),
+                        thrust: rng.gen_range(175.0..290.0),
+                        heading,
+                        wiggle_hz: rng.gen_range(10.0..18.0),
+                        wiggle_amp: rng.gen_range(0.85..1.65),
+                        turn: rng.gen_range(-2.8..2.8),
+                        ..default()
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -2579,47 +2649,90 @@ fn update_sparks(
         let age = 1.0 - spark.life / spark.max_life;
         let speed = spark.vel.length();
 
-        // Crossette break: the star pops into a small cross of fragments.
+        // Crossette break, or a bee crackle pop (self-propelled star).
         if spark.split_at > 0.0 && age >= spark.split_at {
             let pos = tf.translation.truncate();
-            spawn_flash(
-                &mut budget,
-                &mut commands,
-                scene.as_deref(),
-                &tex.0,
-                pos,
-                60.0,
-                0.1,
-                spark.color,
-            );
-            let base_angle = rng.gen_range(0.0..TAU);
-            for i in 0..4 {
-                let a = base_angle + i as f32 * TAU / 4.0;
-                let life = rng.gen_range(0.5..0.8);
-                spawn_spark(
+            if spark.thrust > 0.0 {
+                let crackle = Vec3::new(0.95, 0.92, 0.78);
+                spawn_flash(
                     &mut budget,
                     &mut commands,
                     scene.as_deref(),
                     &tex.0,
                     pos,
-                    Spark {
-                        vel: spark.vel * 0.3 + Vec2::from_angle(a) * rng.gen_range(110.0..150.0),
-                        life,
-                        max_life: life,
-                        color: spark.color,
-                        drag: 1.8,
-                        size: if spark.trail_interval > 0.0 { 3.6 } else { 2.6 },
-                        trail_interval: if spark.trail_interval > 0.0 {
-                            0.024
-                        } else {
-                            0.0
-                        },
-                        trail_life: 0.38,
-                        seed: rng.gen_range(0.0..1.0),
-                        brightness: spark.brightness.max(1.0),
-                        ..default()
-                    },
+                    rng.gen_range(22.0..38.0),
+                    0.06,
+                    crackle,
                 );
+                let bits = rng.gen_range(5..9);
+                for _ in 0..bits {
+                    let life = rng.gen_range(0.14..0.32);
+                    spawn_spark(
+                        &mut budget,
+                        &mut commands,
+                        scene.as_deref(),
+                        &tex.0,
+                        pos,
+                        Spark {
+                            vel: spark.vel * 0.2
+                                + Vec2::from_angle(rng.gen_range(0.0..TAU))
+                                    * rng.gen_range(35.0..95.0),
+                            life,
+                            max_life: life,
+                            color: if rng.gen_bool(0.35) {
+                                spark.color
+                            } else {
+                                crackle
+                            },
+                            drag: 2.6,
+                            gravity_mul: 0.4,
+                            size: rng.gen_range(1.2..2.0),
+                            seed: rng.gen_range(0.0..1.0),
+                            brightness: rng.gen_range(1.4..2.1),
+                            ..default()
+                        },
+                    );
+                }
+            } else {
+                spawn_flash(
+                    &mut budget,
+                    &mut commands,
+                    scene.as_deref(),
+                    &tex.0,
+                    pos,
+                    60.0,
+                    0.1,
+                    spark.color,
+                );
+                let base_angle = rng.gen_range(0.0..TAU);
+                for i in 0..4 {
+                    let a = base_angle + i as f32 * TAU / 4.0;
+                    let life = rng.gen_range(0.5..0.8);
+                    spawn_spark(
+                        &mut budget,
+                        &mut commands,
+                        scene.as_deref(),
+                        &tex.0,
+                        pos,
+                        Spark {
+                            vel: spark.vel * 0.3 + Vec2::from_angle(a) * rng.gen_range(110.0..150.0),
+                            life,
+                            max_life: life,
+                            color: spark.color,
+                            drag: 1.8,
+                            size: if spark.trail_interval > 0.0 { 3.6 } else { 2.6 },
+                            trail_interval: if spark.trail_interval > 0.0 {
+                                0.024
+                            } else {
+                                0.0
+                            },
+                            trail_life: 0.38,
+                            seed: rng.gen_range(0.0..1.0),
+                            brightness: spark.brightness.max(1.0),
+                            ..default()
+                        },
+                    );
+                }
             }
             budget.sparks = budget.sparks.saturating_sub(1);
             commands.entity(entity).despawn();
