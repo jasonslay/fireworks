@@ -2285,7 +2285,7 @@ fn spawn_mine_spray(
         MineSpray {
             life: MINE_DURATION,
             max_life: MINE_DURATION,
-            spread: rng.gen_range(0.38..0.52),
+            spread: rng.gen_range(0.30..0.42),
         },
         ),
     );
@@ -2348,9 +2348,9 @@ fn update_mine_sprays(
             };
             let trailed = rng.gen_bool(0.22);
             let life = if trailed {
-                rng.gen_range(0.55..0.85)
+                rng.gen_range(0.72..1.10)
             } else {
-                rng.gen_range(0.38..0.68)
+                rng.gen_range(0.52..0.88)
             };
             spawn_spark(
                 &mut budget,
@@ -2359,12 +2359,12 @@ fn update_mine_sprays(
                 &tex.0,
                 pos + Vec2::new(rng.gen_range(-3.0..3.0), rng.gen_range(0.0..8.0)),
                 Spark {
-                    vel: mine_dir(&mut rng, mine.spread) * rng.gen_range(300.0..460.0),
+                    vel: mine_dir(&mut rng, mine.spread) * rng.gen_range(420.0..640.0),
                     life,
                     max_life: life,
                     color,
-                    drag: rng.gen_range(1.5..2.1),
-                    gravity_mul: 0.58,
+                    drag: rng.gen_range(1.25..1.75),
+                    gravity_mul: 0.46,
                     size: if trailed {
                         rng.gen_range(3.2..4.6)
                     } else {
