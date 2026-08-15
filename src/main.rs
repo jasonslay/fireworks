@@ -3,7 +3,7 @@
 //! Realism notes:
 //! - Stars are sampled on a 3D sphere and projected to 2D, which produces the
 //!   dense-rimmed look of real shell breaks. Mines are a 5-second ground
-//!   spray of bright yellow stars, sampled in an upward cone. Flying fish
+//!   spray of bright yellow stars from a tap on the ground. Flying fish
 //!   are self-propelled fuse pieces that dart and zigzag after a quiet break.
 //! - Colors follow real pyrotechnic emitters (strontium red, barium green,
 //!   copper blue, sodium gold...) and evolve white-hot -> color -> ember.
@@ -533,7 +533,6 @@ fn apply_scene(
                 (Vec2::new(-420.0, 210.0), BurstKind::Ring, (COLORS[5], COLORS[5])),
                 (Vec2::new(0.0, 300.0), BurstKind::Crossette, (COLORS[1], COLORS[1])),
                 (Vec2::new(200.0, 180.0), BurstKind::Strobe, (COLORS[7], COLORS[7])),
-                (Vec2::new(-150.0, GROUND_Y + 10.0), BurstKind::Mine, (COLORS[0], COLORS[2])),
                 (Vec2::new(80.0, 220.0), BurstKind::FlyingFish, (COLORS[7], COLORS[2])),
             ];
             for (pos, kind, palette) in bursts {
@@ -1115,10 +1114,10 @@ fn setup(
 
     if native.0 {
         info!(
-            "Controls: tap/click = launch at point, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, Esc = quit"
+            "Controls: tap/click sky = shell, tap ground = mine, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, Esc = quit"
         );
     } else {
-        info!("Controls: tap/click = launch at point, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, F11 = fullscreen, Esc = quit");
+        info!("Controls: tap/click sky = shell, tap ground = mine, two-finger tap or Space = finale, A = toggle auto-launch, F = FPS overlay, F11 = fullscreen, Esc = quit");
     }
     #[cfg(target_arch = "wasm32")]
     if native.0 {
@@ -1471,8 +1470,7 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
         49..=56 => BurstKind::Palm,
         57..=64 => BurstKind::Ring,
         65..=72 => BurstKind::Crossette,
-        73..=80 => BurstKind::Strobe,
-        81..=89 => BurstKind::Mine,
+        73..=84 => BurstKind::Strobe,
         _ => BurstKind::FlyingFish,
     }
 }
@@ -1490,6 +1488,23 @@ fn launch_finale(
     }
 }
 
+fn ridge_y_at(columns: &[Vec2], x: f32) -> f32 {
+    if columns.is_empty() {
+        return GROUND_Y + 16.0;
+    }
+    if x <= columns[0].x {
+        return columns[0].y;
+    }
+    for w in columns.windows(2) {
+        if x <= w[1].x {
+            let span = (w[1].x - w[0].x).max(0.001);
+            let t = ((x - w[0].x) / span).clamp(0.0, 1.0);
+            return w[0].y + (w[1].y - w[0].y) * t;
+        }
+    }
+    columns[columns.len() - 1].y
+}
+
 fn try_launch_at_viewport(
     commands: &mut Commands,
     scene: Option<&SceneRoot>,
@@ -1499,10 +1514,26 @@ fn try_launch_at_viewport(
     cam_tf: &GlobalTransform,
     design_scale: f32,
     viewport: Vec2,
+    hills: Option<&FgHillsLighting>,
 ) {
-    if let Ok(world) = camera.viewport_to_world_2d(cam_tf, viewport) {
-        let x = world.x / design_scale + rng.gen_range(-15.0..15.0);
-        launch_shell(commands, scene, tex, rng, x, world.y / design_scale);
+    let Ok(world) = camera.viewport_to_world_2d(cam_tf, viewport) else {
+        return;
+    };
+    let pos = world / design_scale;
+    let ground = hills
+        .map(|h| ridge_y_at(&h.columns, pos.x) + 40.0)
+        .unwrap_or(GROUND_Y + 80.0);
+    if pos.y <= ground {
+        spawn_mine_spray(
+            commands,
+            scene,
+            tex,
+            rng,
+            Vec2::new(pos.x, pos.y.max(GROUND_Y)),
+        );
+    } else {
+        let x = pos.x + rng.gen_range(-15.0..15.0);
+        launch_shell(commands, scene, tex, rng, x, pos.y);
     }
 }
 
@@ -1516,17 +1547,6 @@ fn launch_shell(
 ) {
     let kind = random_kind(rng);
     let palette = random_palette(rng);
-
-    if kind == BurstKind::Mine {
-        spawn_mine_spray(
-            commands,
-            scene,
-            tex,
-            rng,
-            Vec2::new(launch_x, GROUND_Y),
-        );
-        return;
-    }
 
     let h = (apex_y + APEX_BOOST - GROUND_Y).max(MIN_BURST_HEIGHT);
     let v0 = (2.0 * -GRAVITY * h).sqrt();
@@ -1599,6 +1619,7 @@ fn handle_input(
     touches: Res<Touches>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
+    hills: Option<Res<FgHillsLighting>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let mut rng = thread_rng();
@@ -1657,6 +1678,7 @@ fn handle_input(
                     cam_tf,
                     design_scale,
                     touch.position(),
+                    hills.as_deref(),
                 );
             }
         }
@@ -1676,6 +1698,7 @@ fn handle_input(
                 cam_tf,
                 design_scale,
                 cursor,
+                hills.as_deref(),
             );
         }
     }
