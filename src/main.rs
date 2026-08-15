@@ -667,6 +667,10 @@ struct GrassFire {
     max_life: f32,
     width: f32,
     seed: f32,
+    /// Dark scorch / coal bed under the glow; no flame particles.
+    bed: bool,
+    /// First-frame ignition pop has already been spawned.
+    ignited: bool,
 }
 
 #[derive(Component)]
@@ -698,6 +702,8 @@ struct Spark {
     wiggle_amp: f32,
     /// Slow heading drift in rad/s, so each fish takes its own path.
     turn: f32,
+    /// Ground-fire tongue/core: heat rise, hold-then-shrink, yellow→red cool.
+    is_fire: bool,
 }
 
 impl Default for Spark {
@@ -723,6 +729,7 @@ impl Default for Spark {
             wiggle_hz: 0.0,
             wiggle_amp: 0.0,
             turn: 0.0,
+            is_fire: false,
         }
     }
 }
@@ -2361,13 +2368,26 @@ fn ignite_grass(
     fires: &mut Query<(&mut GrassFire, &Transform), Without<Spark>>,
     x: f32,
 ) {
+    let mut hit_x = None;
     for (mut fire, tf) in fires.iter_mut() {
+        if fire.bed {
+            continue;
+        }
         if (tf.translation.x - x).abs() < GRASS_FIRE_MERGE {
             fire.life = (fire.life + 1.2).min(fire.max_life);
-            return;
+            hit_x = Some(tf.translation.x);
+            break;
         }
     }
-    if fires.iter().count() >= MAX_GRASS_FIRES {
+    if let Some(hx) = hit_x {
+        for (mut fire, tf) in fires.iter_mut() {
+            if fire.bed && (tf.translation.x - hx).abs() < 1.0 {
+                fire.life = (fire.life + 1.2).min(fire.max_life);
+            }
+        }
+        return;
+    }
+    if fires.iter().filter(|(f, _)| !f.bed).count() >= MAX_GRASS_FIRES {
         return;
     }
     let y = ridge_y_at(&hills.columns, x) + rng.gen_range(2.0..8.0);
@@ -2381,22 +2401,48 @@ fn spawn_grass_fire(
     rng: &mut impl Rng,
     pos: Vec2,
 ) {
+    let width = rng.gen_range(16.0..24.0);
+    let seed = rng.gen_range(0.0..100.0);
+    // Dark scorch / coal bed so the grass looks burned, not just lit.
     spawn_in_scene(
         commands,
         scene,
         (
         Sprite {
             image: tex.clone(),
-            color: Color::linear_rgba(7.0, 2.4, 0.35, 1.0),
-            custom_size: Some(Vec2::new(48.0, 18.0)),
+            color: Color::linear_rgba(0.12, 0.04, 0.015, 0.7),
+            custom_size: Some(Vec2::new(width * 2.9, 9.0)),
+            ..default()
+        },
+        Transform::from_xyz(pos.x, pos.y - 1.5, 8.52),
+        GrassFire {
+            life: GRASS_FIRE_DURATION + 1.6,
+            max_life: GRASS_FIRE_DURATION + 1.6,
+            width,
+            seed,
+            bed: true,
+            ignited: true,
+        },
+        ),
+    );
+    spawn_in_scene(
+        commands,
+        scene,
+        (
+        Sprite {
+            image: tex.clone(),
+            color: Color::linear_rgba(6.0, 1.8, 0.22, 1.0),
+            custom_size: Some(Vec2::new(width * 1.9, 10.0)),
             ..default()
         },
         Transform::from_xyz(pos.x, pos.y, 8.6),
         GrassFire {
             life: GRASS_FIRE_DURATION,
             max_life: GRASS_FIRE_DURATION,
-            width: rng.gen_range(16.0..24.0),
-            seed: rng.gen_range(0.0..100.0),
+            width,
+            seed,
+            bed: false,
+            ignited: false,
         },
         ),
     );
@@ -2415,6 +2461,13 @@ fn spawn_grass_fire(
     );
 }
 
+/// How many particles a rate-per-second should emit this frame.
+fn emit_count(rate: f32, dt: f32, rng: &mut impl Rng) -> u32 {
+    let expected = (rate * dt).max(0.0);
+    let n = expected.floor() as u32;
+    n + u32::from(rng.gen_range(0.0..1.0) < expected.fract())
+}
+
 fn update_grass_fires(
     mut commands: Commands,
     time: Res<Time>,
@@ -2427,6 +2480,7 @@ fn update_grass_fires(
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let mut rng = thread_rng();
+    let scene_root = scene.as_deref();
 
     for (entity, mut fire, mut tf, mut sprite) in &mut fires {
         fire.life -= dt;
@@ -2438,118 +2492,287 @@ fn update_grass_fires(
         let age = (1.0 - fire.life / fire.max_life).clamp(0.0, 1.0);
         // Catch quickly, then crawl wider along the grass before dying back.
         let spread = smoothstep(0.0, 0.4, age) * (1.0 - smoothstep(0.62, 1.0, age));
-        let gate = smoothstep(0.0, 0.06, age) * (1.0 - smoothstep(0.68, 1.0, age));
+        // Tongues die first; the coal bed holds a little longer.
+        let tongue_gate = smoothstep(0.0, 0.05, age) * (1.0 - smoothstep(0.58, 0.88, age));
+        let core_gate = smoothstep(0.0, 0.04, age) * (1.0 - smoothstep(0.70, 1.0, age));
         let width = fire.width * (1.0 + 1.6 * spread);
-        let flicker = 0.72
-            + 0.18 * (now * 23.0 + fire.seed).sin().abs()
-            + 0.10 * (now * 41.0 + fire.seed * 1.7).sin().abs();
-        let glow = 5.5 * gate * flicker;
-        sprite.color = Color::linear_rgba(glow, glow * 0.34, glow * 0.045, gate.max(0.12));
-        sprite.custom_size = Some(Vec2::new(width * 2.4, 14.0 + 10.0 * gate * flicker));
+        let flicker = 0.70
+            + 0.16 * (now * 19.0 + fire.seed).sin().abs()
+            + 0.14 * (now * 37.0 + fire.seed * 1.7).sin().abs();
+        let lean_rot = (-wind.current * 0.014).clamp(-0.22, 0.22);
         tf.scale = Vec3::ONE;
-        tf.rotation = Quat::from_rotation_z((-wind.current * 0.014).clamp(-0.22, 0.22));
+        tf.rotation = Quat::from_rotation_z(lean_rot);
 
-        let raw = (dt * (38.0 + 22.0 * spread) * gate).round() as u32;
-        if raw == 0 {
+        if fire.bed {
+            let stain = core_gate.max(0.22 * (1.0 - age));
+            sprite.color = Color::linear_rgba(
+                0.10 * stain,
+                0.035 * stain,
+                0.012 * stain,
+                (0.62 * stain).max(0.18),
+            );
+            sprite.custom_size = Some(Vec2::new(width * 2.95, 8.0 + 3.5 * stain));
             continue;
         }
-        let n = scale_burst_count(raw, &budget);
+
+        let glow = 4.8 * core_gate * flicker;
+        sprite.color = Color::linear_rgba(glow, glow * 0.26, glow * 0.03, core_gate.max(0.16));
+        sprite.custom_size = Some(Vec2::new(width * 1.75, 7.5 + 5.5 * core_gate * flicker));
+
         let origin = tf.translation.truncate();
         let lean = wind.current * 0.45;
-        for _ in 0..n {
-            if !budget.can_spawn_spark() {
-                break;
-            }
-            let x_off = rng.gen_range(-width..width);
-            let kind = rng.gen_range(0..10);
-            if kind < 6 {
-                // Short flame tongues licking up from the grass.
-                let life = rng.gen_range(0.18..0.38);
-                let color = if rng.gen_bool(0.4) {
-                    Vec3::new(1.0, 0.78, 0.16)
-                } else if rng.gen_bool(0.55) {
-                    Vec3::new(1.0, 0.38, 0.05)
-                } else {
-                    Vec3::new(0.95, 0.16, 0.02)
-                };
-                spawn_spark_z(
+
+        if !fire.ignited {
+            fire.ignited = true;
+            // Ignition pop: a handful of extra core embers so the fire catches.
+            let pop = scale_burst_count(10, &budget);
+            for _ in 0..pop {
+                spawn_fire_core(
                     &mut budget,
                     &mut commands,
-                    scene.as_deref(),
+                    scene_root,
                     &tex.0,
-                    origin + Vec2::new(x_off, rng.gen_range(0.0..4.0)),
-                    Spark {
-                        vel: Vec2::new(
-                            lean + rng.gen_range(-16.0..16.0),
-                            rng.gen_range(18.0..52.0),
-                        ),
-                        life,
-                        max_life: life,
-                        color,
-                        drag: 3.2,
-                        gravity_mul: 0.08,
-                        size: rng.gen_range(1.3..2.4),
-                        seed: rng.gen_range(0.0..1.0),
-                        brightness: rng.gen_range(1.05..1.45),
-                        ..default()
-                    },
-                    8.7,
-                );
-            } else if kind < 8 {
-                // Lofted embers that pop and drift.
-                let life = rng.gen_range(0.45..0.85);
-                spawn_spark_z(
-                    &mut budget,
-                    &mut commands,
-                    scene.as_deref(),
-                    &tex.0,
-                    origin + Vec2::new(x_off * 0.7, rng.gen_range(2.0..8.0)),
-                    Spark {
-                        vel: Vec2::new(
-                            lean * 1.4 + rng.gen_range(-28.0..28.0),
-                            rng.gen_range(40.0..88.0),
-                        ),
-                        life,
-                        max_life: life,
-                        color: Vec3::new(1.0, 0.55, 0.12),
-                        drag: 1.8,
-                        gravity_mul: 0.22,
-                        size: rng.gen_range(1.1..1.8),
-                        seed: rng.gen_range(0.0..1.0),
-                        brightness: rng.gen_range(1.2..1.7),
-                        ..default()
-                    },
-                    8.72,
-                );
-            } else {
-                // Slow gray smoke.
-                let life = rng.gen_range(0.7..1.35);
-                spawn_spark_z(
-                    &mut budget,
-                    &mut commands,
-                    scene.as_deref(),
-                    &tex.0,
-                    origin + Vec2::new(x_off * 0.85, rng.gen_range(6.0..14.0)),
-                    Spark {
-                        vel: Vec2::new(
-                            lean * 0.8 + rng.gen_range(-10.0..10.0),
-                            rng.gen_range(10.0..28.0),
-                        ),
-                        life,
-                        max_life: life,
-                        color: Vec3::new(0.16, 0.14, 0.12),
-                        drag: 1.15,
-                        gravity_mul: 0.04,
-                        size: rng.gen_range(3.4..5.8),
-                        seed: rng.gen_range(0.0..1.0),
-                        brightness: 0.12,
-                        ..default()
-                    },
-                    8.55,
+                    &mut rng,
+                    origin,
+                    width,
+                    lean,
+                    1.15,
                 );
             }
         }
+
+        // Two layers: a tight low core (the surface is on fire) and taller
+        // tongues that climb out of it. Spawn from an area, never a point.
+        // scale_burst_count never returns 0, so skip it when the layer is idle.
+        let core_n = match emit_count(28.0 * core_gate, dt, &mut rng) {
+            0 => 0,
+            n => scale_burst_count(n, &budget),
+        };
+        for _ in 0..core_n {
+            spawn_fire_core(
+                &mut budget,
+                &mut commands,
+                scene_root,
+                &tex.0,
+                &mut rng,
+                origin,
+                width,
+                lean,
+                1.0,
+            );
+        }
+        let tongue_n = match emit_count(16.0 * tongue_gate, dt, &mut rng) {
+            0 => 0,
+            n => scale_burst_count(n, &budget),
+        };
+        for _ in 0..tongue_n {
+            spawn_fire_tongue(
+                &mut budget,
+                &mut commands,
+                scene_root,
+                &tex.0,
+                &mut rng,
+                origin,
+                width,
+                lean,
+            );
+        }
+        let ember_n = match emit_count(3.2 * tongue_gate, dt, &mut rng) {
+            0 => 0,
+            n => scale_burst_count(n, &budget),
+        };
+        for _ in 0..ember_n {
+            spawn_fire_ember(
+                &mut budget,
+                &mut commands,
+                scene_root,
+                &tex.0,
+                &mut rng,
+                origin,
+                width,
+                lean,
+            );
+        }
+        let smoke_n = match emit_count(5.5 * core_gate, dt, &mut rng) {
+            0 => 0,
+            n => scale_burst_count(n, &budget),
+        };
+        for _ in 0..smoke_n {
+            spawn_fire_smoke(
+                &mut budget,
+                &mut commands,
+                scene_root,
+                &tex.0,
+                &mut rng,
+                origin,
+                width,
+                lean,
+            );
+        }
     }
+}
+
+fn fire_flame_color(rng: &mut impl Rng) -> Vec3 {
+    if rng.gen_bool(0.35) {
+        Vec3::new(1.0, 0.88, 0.32)
+    } else if rng.gen_bool(0.55) {
+        Vec3::new(1.0, 0.48, 0.08)
+    } else {
+        Vec3::new(0.95, 0.18, 0.03)
+    }
+}
+
+fn spawn_fire_core(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    width: f32,
+    lean: f32,
+    bright: f32,
+) {
+    if !budget.can_spawn_spark() {
+        return;
+    }
+    let life = rng.gen_range(0.16..0.32);
+    spawn_spark_z(
+        budget,
+        commands,
+        scene,
+        tex,
+        origin + Vec2::new(rng.gen_range(-width * 0.42..width * 0.42), rng.gen_range(0.0..7.0)),
+        Spark {
+            vel: Vec2::new(lean * 0.35 + rng.gen_range(-8.0..8.0), rng.gen_range(6.0..22.0)),
+            life,
+            max_life: life,
+            color: fire_flame_color(rng),
+            drag: 2.4,
+            gravity_mul: 0.02,
+            size: rng.gen_range(2.2..3.8),
+            seed: rng.gen_range(0.0..1.0),
+            brightness: rng.gen_range(0.85..1.15) * bright,
+            is_fire: true,
+            ..default()
+        },
+        8.7,
+    );
+}
+
+fn spawn_fire_tongue(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    width: f32,
+    lean: f32,
+) {
+    if !budget.can_spawn_spark() {
+        return;
+    }
+    let life = rng.gen_range(0.28..0.52);
+    spawn_spark_z(
+        budget,
+        commands,
+        scene,
+        tex,
+        origin + Vec2::new(rng.gen_range(-width * 0.38..width * 0.38), rng.gen_range(2.0..12.0)),
+        Spark {
+            vel: Vec2::new(lean + rng.gen_range(-14.0..14.0), rng.gen_range(20.0..46.0)),
+            life,
+            max_life: life,
+            color: fire_flame_color(rng),
+            drag: 1.9,
+            gravity_mul: 0.02,
+            size: rng.gen_range(2.8..4.8),
+            seed: rng.gen_range(0.0..1.0),
+            brightness: rng.gen_range(0.75..1.05),
+            is_fire: true,
+            ..default()
+        },
+        8.71,
+    );
+}
+
+fn spawn_fire_ember(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    width: f32,
+    lean: f32,
+) {
+    if !budget.can_spawn_spark() {
+        return;
+    }
+    let life = rng.gen_range(0.55..1.05);
+    spawn_spark_z(
+        budget,
+        commands,
+        scene,
+        tex,
+        origin + Vec2::new(rng.gen_range(-width * 0.55..width * 0.55), rng.gen_range(4.0..10.0)),
+        Spark {
+            vel: Vec2::new(
+                lean * 1.3 + rng.gen_range(-22.0..22.0),
+                rng.gen_range(36.0..78.0),
+            ),
+            life,
+            max_life: life,
+            color: Vec3::new(1.0, 0.42, 0.08),
+            drag: 1.35,
+            gravity_mul: 0.16,
+            size: rng.gen_range(0.9..1.5),
+            seed: rng.gen_range(0.0..1.0),
+            brightness: rng.gen_range(0.9..1.35),
+            ..default()
+        },
+        8.72,
+    );
+}
+
+fn spawn_fire_smoke(
+    budget: &mut ParticleBudget,
+    commands: &mut Commands,
+    scene: Option<&SceneRoot>,
+    tex: &Handle<Image>,
+    rng: &mut impl Rng,
+    origin: Vec2,
+    width: f32,
+    lean: f32,
+) {
+    if !budget.can_spawn_spark() {
+        return;
+    }
+    let life = rng.gen_range(0.9..1.7);
+    spawn_spark_z(
+        budget,
+        commands,
+        scene,
+        tex,
+        origin + Vec2::new(rng.gen_range(-width * 0.7..width * 0.7), rng.gen_range(8.0..16.0)),
+        Spark {
+            vel: Vec2::new(
+                lean * 0.9 + rng.gen_range(-8.0..8.0),
+                rng.gen_range(8.0..22.0),
+            ),
+            life,
+            max_life: life,
+            color: Vec3::new(0.18, 0.16, 0.14),
+            drag: 0.85,
+            gravity_mul: 0.03,
+            size: rng.gen_range(4.0..7.2),
+            seed: rng.gen_range(0.0..1.0),
+            brightness: 0.12,
+            ..default()
+        },
+        8.55,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2575,7 +2798,7 @@ fn update_sparks(
     for (entity, mut spark, mut tf, mut sprite) in &mut sparks {
         spark.life -= dt;
         if spark.life <= 0.0 || tf.translation.y < GROUND_Y {
-            if tf.translation.y < GROUND_Y && spark.gravity_mul > 0.2 {
+            if tf.translation.y < GROUND_Y && spark.gravity_mul > 0.2 && !spark.is_fire {
                 let x = tf.translation.x;
                 if !ground_hits.iter().any(|h| (h - x).abs() < GRASS_FIRE_MERGE) {
                     ground_hits.push(x);
@@ -2592,6 +2815,11 @@ fn update_sparks(
         let g = GRAVITY * spark.gravity_mul * dt;
         spark.vel.y += g;
         spark.vel.x += wind.current * dt;
+        if spark.is_fire {
+            // Heat rise: accelerate up instead of holding a constant launch speed.
+            spark.vel.y += 105.0 * dt;
+            spark.vel.x += wind.current * 7.0 * dt;
+        }
         if spark.thrust > 0.0 {
             spark.heading += spark.turn * dt;
             let wiggle = (now * spark.wiggle_hz * TAU + spark.seed * TAU).sin()
@@ -2683,8 +2911,15 @@ fn update_sparks(
         // Appearance.
         let (rgb, alpha) = spark_color(&spark, age, speed, now);
         sprite.color = Color::linear_rgba(rgb.x, rgb.y, rgb.z, alpha);
-        // Hold size steady during the fade-out so sub-pixel shrink doesn't shimmer.
-        let scale = if age < 0.7 {
+        // Flames hold size, then pinch off at the tip. Stars hold steady in
+        // fade-out so sub-pixel shrink doesn't shimmer.
+        let scale = if spark.is_fire {
+            if age < 0.32 {
+                1.0
+            } else {
+                (1.0 - (age - 0.32) / 0.68).max(0.14)
+            }
+        } else if age < 0.7 {
             0.55 + 0.45 * (1.0 - age)
         } else {
             0.685
@@ -2710,6 +2945,23 @@ fn update_sparks(
 /// Color evolution of a burning star: white-hot flash at ignition, steady
 /// colored burn, then a dimming orange ember before extinction.
 fn spark_color(spark: &Spark, age: f32, speed: f32, now: f32) -> (Vec3, f32) {
+    if spark.is_fire {
+        // Yellow → orange → deep red as the tongue cools. No firework white-hot.
+        let c = if age < 0.28 {
+            spark.color.lerp(Vec3::new(1.0, 0.94, 0.48), 1.0 - age / 0.28)
+        } else if age < 0.62 {
+            spark.color.lerp(Vec3::new(1.0, 0.26, 0.04), (age - 0.28) / 0.34)
+        } else {
+            Vec3::new(1.0, 0.26, 0.04).lerp(Vec3::new(0.40, 0.05, 0.01), (age - 0.62) / 0.38)
+        };
+        let mut i = (4.4 * (1.0 - age).powf(0.85) + 0.5) * spark.brightness;
+        let flicker = (now * 29.0 + spark.seed * 80.0).sin()
+            * (now * 47.0 + spark.seed * 33.0).sin();
+        i *= 1.0 + 0.24 * flicker.abs() * (1.0 - age);
+        let fade = 1.0 - smoothstep(0.70, 0.98, age);
+        return (c * i * fade, fade);
+    }
+
     let smoke = spark.brightness < 0.35;
     let hot = if smoke {
         0.0
