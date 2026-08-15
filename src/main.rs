@@ -51,9 +51,8 @@ const MINE_DURATION: f32 = 5.0;
 const MINE_YELLOW: Vec3 = Vec3::new(1.0, 0.94, 0.10);
 /// Charcoal streamer gold of a rising comet.
 const COMET_GOLD: Vec3 = Vec3::new(1.0, 0.58, 0.16);
-/// Lift aerial breaks a little so they sit higher in the sky.
-const APEX_BOOST: f32 = 60.0;
-const MIN_BURST_HEIGHT: f32 = 200.0;
+/// Linear drag on rising shells: `vel *= 1 - SHELL_DRAG * dt`.
+const SHELL_DRAG: f32 = 0.12;
 
 /// Stars fill the 1280×800 design view plus the extra sky revealed on tall
 /// portrait phones. AutoMin + a bottom-anchored camera keeps world width at
@@ -1496,6 +1495,49 @@ fn launch_finale(
     }
 }
 
+/// World size of the AutoMin(1280×800) view for a viewport of `viewport_size`.
+fn design_view_size(viewport_size: Vec2) -> Vec2 {
+    let width = viewport_size.x.max(1.0);
+    let height = viewport_size.y.max(1.0);
+    if width * DESIGN_HEIGHT > DESIGN_WIDTH * height {
+        Vec2::new(width * DESIGN_HEIGHT / height, DESIGN_HEIGHT)
+    } else {
+        Vec2::new(DESIGN_WIDTH, height * DESIGN_WIDTH / width)
+    }
+}
+
+/// Convert a screen tap (top-left origin, Y down) into design-space world
+/// coordinates. The camera is bottom-anchored at `(0, DESIGN_CAMERA_Y)`, so
+/// this must flip Y — using the raw viewport Y as a world height makes
+/// higher taps burst lower.
+fn viewport_to_design(viewport: Vec2, viewport_size: Vec2) -> Vec2 {
+    let view = design_view_size(viewport_size);
+    let nx = (viewport.x / viewport_size.x.max(1.0)).clamp(0.0, 1.0);
+    let ny = 1.0 - (viewport.y / viewport_size.y.max(1.0)).clamp(0.0, 1.0);
+    Vec2::new((nx - 0.5) * view.x, DESIGN_CAMERA_Y + ny * view.y)
+}
+
+/// Initial speed and time-to-apex so a particle with exponential drag
+/// `v *= exp(-drag * dt)` and gravity `GRAVITY * gravity_mul` peaks at `apex_y`.
+fn speed_for_apex(start_y: f32, apex_y: f32, drag: f32, gravity_mul: f32) -> (f32, f32) {
+    let target = apex_y.max(start_y + 40.0);
+    let g = (-GRAVITY * gravity_mul).max(1.0);
+    let d = drag.max(0.05);
+    let u = g / d;
+    let mut v0 = (2.0 * g * (target - start_y)).sqrt().max(40.0);
+    for _ in 0..10 {
+        let t = ((u / (v0 + u)).ln() / -d).max(0.05);
+        let y = start_y + v0 / d - u * t;
+        let dy_dv = (v0 / (v0 + u)) / d;
+        v0 = (v0 - (y - target) / dy_dv.max(1e-4)).clamp(40.0, 2800.0);
+        if (y - target).abs() < 0.75 {
+            break;
+        }
+    }
+    let t = ((u / (v0 + u)).ln() / -d).max(0.15);
+    (v0, t)
+}
+
 fn ridge_y_at(columns: &[Vec2], x: f32) -> f32 {
     if columns.is_empty() {
         return GROUND_Y + 16.0;
@@ -1519,16 +1561,11 @@ fn try_launch_at_viewport(
     tex: &Handle<Image>,
     rng: &mut ThreadRng,
     budget: &mut ParticleBudget,
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-    design_scale: f32,
     viewport: Vec2,
+    viewport_size: Vec2,
     hills: Option<&FgHillsLighting>,
 ) {
-    let Ok(world) = camera.viewport_to_world_2d(cam_tf, viewport) else {
-        return;
-    };
-    let pos = world / design_scale;
+    let pos = viewport_to_design(viewport, viewport_size);
     let ground = hills
         .map(|h| ridge_y_at(&h.columns, pos.x) + 40.0)
         .unwrap_or(GROUND_Y + 80.0);
@@ -1572,8 +1609,7 @@ fn launch_shell(
         return;
     }
 
-    let h = (apex_y + APEX_BOOST - GROUND_Y).max(MIN_BURST_HEIGHT);
-    let v0 = (2.0 * -GRAVITY * h).sqrt();
+    let (v0, t_apex) = speed_for_apex(GROUND_Y, apex_y, SHELL_DRAG, 1.0);
     spawn_in_scene(
         commands,
         scene,
@@ -1587,7 +1623,7 @@ fn launch_shell(
         Transform::from_xyz(launch_x, GROUND_Y, 5.0),
         Shell {
             vel: Vec2::new(rng.gen_range(-24.0..24.0), v0),
-            fuse: (v0 / -GRAVITY) * rng.gen_range(0.86..0.97),
+            fuse: t_apex * 1.25,
             kind,
             palette,
             tail_timer: 0.0,
@@ -1645,12 +1681,15 @@ fn handle_input(
     mouse: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
     hills: Option<Res<FgHillsLighting>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let mut rng = thread_rng();
-    let design_scale = scene.as_ref().map(|s| s.scale).unwrap_or(1.0);
+    let viewport_size = windows
+        .single_mut()
+        .ok()
+        .map(|w| w.size())
+        .unwrap_or(Vec2::new(DESIGN_WIDTH, DESIGN_HEIGHT));
 
     guard.ignore_mouse_for = (guard.ignore_mouse_for - time.delta_secs()).max(0.0);
     if touches.any_just_pressed() || touches.any_just_released() {
@@ -1689,31 +1728,25 @@ fn handle_input(
         launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng, &mut budget);
     }
 
-    let camera = camera_q.single().ok();
-
     if touches.any_just_pressed() {
-        if let Some((camera, cam_tf)) = camera {
-            if touches.iter().count() >= 2 {
-                launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng, &mut budget);
-            } else if let Some(touch) = touches.iter_just_pressed().next() {
-                try_launch_at_viewport(
-                    &mut commands,
-                    scene.as_deref(),
-                    &tex.0,
-                    &mut rng,
-                    &mut budget,
-                    camera,
-                    cam_tf,
-                    design_scale,
-                    touch.position(),
-                    hills.as_deref(),
-                );
-            }
+        if touches.iter().count() >= 2 {
+            launch_finale(&mut commands, scene.as_deref(), &tex.0, &mut rng, &mut budget);
+        } else if let Some(touch) = touches.iter_just_pressed().next() {
+            try_launch_at_viewport(
+                &mut commands,
+                scene.as_deref(),
+                &tex.0,
+                &mut rng,
+                &mut budget,
+                touch.position(),
+                viewport_size,
+                hills.as_deref(),
+            );
         }
     }
 
     if mouse.just_pressed(MouseButton::Left) && guard.ignore_mouse_for <= 0.0 {
-        let (Ok(window), Some((camera, cam_tf))) = (windows.single_mut(), camera) else {
+        let Ok(window) = windows.single_mut() else {
             return;
         };
         if let Some(cursor) = window.cursor_position() {
@@ -1723,10 +1756,8 @@ fn handle_input(
                 &tex.0,
                 &mut rng,
                 &mut budget,
-                camera,
-                cam_tf,
-                design_scale,
                 cursor,
+                window.size(),
                 hills.as_deref(),
             );
         }
@@ -1763,7 +1794,7 @@ fn update_shells(
     for (entity, mut shell, mut tf) in &mut shells {
         shell.fuse -= dt;
         shell.vel.y += GRAVITY * dt;
-        shell.vel *= (1.0 - 0.12 * dt).max(0.0);
+        shell.vel *= (1.0 - SHELL_DRAG * dt).max(0.0);
         shell.vel.x += wind.current * 0.3 * dt;
         tf.translation.x += shell.vel.x * dt;
         tf.translation.y += shell.vel.y * dt;
@@ -1790,7 +1821,8 @@ fn update_shells(
             }
         }
 
-        if shell.fuse <= 0.0 {
+        let at_apex = tf.translation.y > GROUND_Y + 80.0 && shell.vel.y <= 0.0;
+        if at_apex || shell.fuse <= 0.0 {
             let pos = tf.translation.truncate();
             spawn_burst(
                 &mut budget,
@@ -2279,8 +2311,6 @@ fn spawn_comet(
         _ => 3,
     };
     let gravity_mul = 0.74;
-    let h = (apex_y + APEX_BOOST - origin.y).max(MIN_BURST_HEIGHT);
-    let v0 = (2.0 * -GRAVITY * gravity_mul * h).sqrt();
     let spread = rng.gen_range(0.055..0.12);
     let crossette = rng.gen_bool(0.18);
     let glitter = Vec3::new(1.0, 0.78, 0.22);
@@ -2322,9 +2352,10 @@ fn spawn_comet(
             _ => pal.0,
         };
         let dir = mine_dir(rng, spread);
-        let speed = v0 * rng.gen_range(0.94..1.06);
-        let t_apex = speed / (-GRAVITY * gravity_mul);
-        let life = (t_apex * rng.gen_range(0.84..1.04)).clamp(1.4, 3.2);
+        let drag = rng.gen_range(0.45..0.70);
+        let (speed, t_apex) = speed_for_apex(origin.y, apex_y, drag, gravity_mul);
+        let speed = speed * rng.gen_range(0.96..1.04);
+        let life = (t_apex * rng.gen_range(0.92..1.04)).clamp(0.8, 4.5);
         let size = rng.gen_range(6.5..8.8);
         spawn_spark(
             budget,
@@ -2337,7 +2368,7 @@ fn spawn_comet(
                 life,
                 max_life: life,
                 color,
-                drag: rng.gen_range(0.82..1.20),
+                drag,
                 gravity_mul,
                 size,
                 trail_interval: rng.gen_range(0.010..0.016),
