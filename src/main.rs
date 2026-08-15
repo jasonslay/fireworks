@@ -50,9 +50,6 @@ const MINE_YELLOW: Vec3 = Vec3::new(1.0, 0.94, 0.10);
 /// Lift aerial breaks a little so they sit higher in the sky.
 const APEX_BOOST: f32 = 60.0;
 const MIN_BURST_HEIGHT: f32 = 200.0;
-const GRASS_FIRE_DURATION: f32 = 6.5;
-const GRASS_FIRE_MERGE: f32 = 52.0;
-const MAX_GRASS_FIRES: usize = 7;
 
 /// Stars fill the 1280×800 design view plus the extra sky revealed on tall
 /// portrait phones. AutoMin + a bottom-anchored camera keeps world width at
@@ -109,7 +106,6 @@ fn main() {
                 update_wind,
                 update_shells,
                 update_mine_sprays,
-                update_grass_fires,
                 update_sparks,
                 update_trails,
                 update_flashes,
@@ -564,10 +560,6 @@ fn apply_scene(
 #[derive(Resource)]
 struct ParticleTexture(Handle<Image>);
 
-/// Flatter blob for grass fire. The spark texture's tight hot core sparkles.
-#[derive(Resource)]
-struct GrassFireTexture(Handle<Image>);
-
 #[derive(Resource)]
 struct Launcher {
     timer: Timer,
@@ -662,28 +654,6 @@ struct MineSpray {
     life: f32,
     max_life: f32,
     spread: f32,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum GrassFireKind {
-    Scorch,
-    Coal,
-    Tongue,
-}
-
-/// Small brush fire on the foreground hills, started by falling embers.
-/// Persistent sprites, not a stream of HDR sparks — those clip to white flashes.
-#[derive(Component)]
-struct GrassFire {
-    life: f32,
-    max_life: f32,
-    width: f32,
-    kind: GrassFireKind,
-    origin: Vec2,
-    x_off: f32,
-    base_h: f32,
-    base_w: f32,
-    phase: f32,
 }
 
 #[derive(Component)]
@@ -932,8 +902,6 @@ fn setup(
     let scene = scene.as_deref();
     let tex = images.add(make_radial_texture(48));
     commands.insert_resource(ParticleTexture(tex.clone()));
-    let fire_tex = images.add(make_fire_texture(64));
-    commands.insert_resource(GrassFireTexture(fire_tex));
 
     let mut rng = thread_rng();
 
@@ -1427,33 +1395,6 @@ fn make_moon_texture(size: u32) -> Image {
         }
     }
 
-    Image::new(
-        Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-}
-
-/// Soft flame blob with no pinprick core, so the grass fire does not sparkle.
-fn make_fire_texture(size: u32) -> Image {
-    let mut data = Vec::with_capacity((size * size * 4) as usize);
-    let half = (size as f32 - 1.0) / 2.0;
-    for y in 0..size {
-        for x in 0..size {
-            let dx = (x as f32 - half) / half;
-            let dy = (y as f32 - half) / half;
-            let d = (dx * dx + dy * dy).sqrt().min(1.0);
-            let a = (1.0 - d * d).clamp(0.0, 1.0).powf(1.2);
-            let a8 = (a * 255.0) as u8;
-            data.extend_from_slice(&[255, 255, 255, a8]);
-        }
-    }
     Image::new(
         Extent3d {
             width: size,
@@ -2381,255 +2322,6 @@ fn update_mine_sprays(
     }
 }
 
-fn ridge_y_at(columns: &[Vec2], x: f32) -> f32 {
-    if columns.is_empty() {
-        return GROUND_Y + 16.0;
-    }
-    if x <= columns[0].x {
-        return columns[0].y;
-    }
-    for w in columns.windows(2) {
-        if x <= w[1].x {
-            let span = (w[1].x - w[0].x).max(0.001);
-            let t = ((x - w[0].x) / span).clamp(0.0, 1.0);
-            return w[0].y + (w[1].y - w[0].y) * t;
-        }
-    }
-    columns[columns.len() - 1].y
-}
-
-fn ignite_grass(
-    commands: &mut Commands,
-    scene: Option<&SceneRoot>,
-    tex: &Handle<Image>,
-    rng: &mut impl Rng,
-    hills: &FgHillsLighting,
-    fires: &mut Query<(&mut GrassFire, &Transform), Without<Spark>>,
-    x: f32,
-) {
-    let mut hit = None;
-    for (fire, _) in fires.iter() {
-        if fire.kind == GrassFireKind::Coal && (fire.origin.x - x).abs() < GRASS_FIRE_MERGE {
-            hit = Some(fire.origin.x);
-            break;
-        }
-    }
-    if let Some(hx) = hit {
-        for (mut fire, _) in fires.iter_mut() {
-            if (fire.origin.x - hx).abs() < 0.5 {
-                fire.life = (fire.life + 1.2).min(fire.max_life);
-            }
-        }
-        return;
-    }
-    if fires
-        .iter()
-        .filter(|(f, _)| f.kind == GrassFireKind::Coal)
-        .count()
-        >= MAX_GRASS_FIRES
-    {
-        return;
-    }
-    let y = ridge_y_at(&hills.columns, x) + rng.gen_range(2.0..8.0);
-    spawn_grass_fire(commands, scene, tex, rng, Vec2::new(x, y));
-}
-
-fn spawn_grass_layer(
-    commands: &mut Commands,
-    scene: Option<&SceneRoot>,
-    tex: &Handle<Image>,
-    pos: Vec2,
-    z: f32,
-    size: Vec2,
-    color: Color,
-    fire: GrassFire,
-) {
-    spawn_in_scene(
-        commands,
-        scene,
-        (
-        Sprite {
-            image: tex.clone(),
-            color,
-            custom_size: Some(size),
-            ..default()
-        },
-        Transform::from_xyz(pos.x, pos.y, z),
-        fire,
-        ),
-    );
-}
-
-fn spawn_grass_fire(
-    commands: &mut Commands,
-    scene: Option<&SceneRoot>,
-    tex: &Handle<Image>,
-    rng: &mut impl Rng,
-    pos: Vec2,
-) {
-    let width = rng.gen_range(18.0..26.0);
-    let seed = rng.gen_range(0.0..100.0);
-    let life = GRASS_FIRE_DURATION;
-    let scorch_life = life + 1.8;
-
-    spawn_grass_layer(
-        commands,
-        scene,
-        tex,
-        pos + Vec2::new(0.0, -2.0),
-        8.52,
-        Vec2::new(width * 3.1, 10.0),
-        Color::linear_rgba(0.10, 0.035, 0.012, 0.72),
-        GrassFire {
-            life: scorch_life,
-            max_life: scorch_life,
-            width,
-            kind: GrassFireKind::Scorch,
-            origin: pos,
-            x_off: 0.0,
-            base_h: 10.0,
-            base_w: width * 3.1,
-            phase: 0.0,
-        },
-    );
-    spawn_grass_layer(
-        commands,
-        scene,
-        tex,
-        pos,
-        8.60,
-        Vec2::new(width * 2.1, 11.0),
-        Color::linear_rgba(1.15, 0.24, 0.04, 0.9),
-        GrassFire {
-            life,
-            max_life: life,
-            width,
-            kind: GrassFireKind::Coal,
-            origin: pos,
-            x_off: 0.0,
-            base_h: 11.0,
-            base_w: width * 2.1,
-            phase: seed,
-        },
-    );
-
-    // Three wide tongues, not a cluster of hot pinpricks.
-    let tongues = [
-        (0.0, 34.0, 18.0, 8.70),
-        (-0.30, 24.0, 15.0, 8.69),
-        (0.28, 22.0, 14.0, 8.71),
-    ];
-    for (i, (x_mul, base_h, base_w, z)) in tongues.into_iter().enumerate() {
-        let x_off = x_mul * width;
-        spawn_grass_layer(
-            commands,
-            scene,
-            tex,
-            pos + Vec2::new(x_off, base_h * 0.38),
-            z,
-            Vec2::new(base_w, base_h),
-            Color::linear_rgba(1.05, 0.28, 0.04, 0.82),
-            GrassFire {
-                life,
-                max_life: life,
-                width,
-                kind: GrassFireKind::Tongue,
-                origin: pos,
-                x_off,
-                base_h,
-                base_w,
-                phase: seed + i as f32 * 1.7,
-            },
-        );
-    }
-
-    spawn_in_scene(
-        commands,
-        scene,
-        (
-        Transform::from_xyz(pos.x, pos.y, 0.0),
-        BurstLight {
-            life: life + 0.4,
-            max_life: life + 0.4,
-            color: Vec3::new(0.55, 0.16, 0.03),
-            sustain: true,
-        },
-        ),
-    );
-}
-
-fn update_grass_fires(
-    mut commands: Commands,
-    time: Res<Time>,
-    wind: Res<Wind>,
-    mut fires: Query<(Entity, &mut GrassFire, &mut Transform, &mut Sprite)>,
-) {
-    let dt = time.delta_secs();
-    let now = time.elapsed_secs();
-    let wind_lean = (-wind.current * 0.012).clamp(-0.18, 0.18);
-
-    for (entity, mut fire, mut tf, mut sprite) in &mut fires {
-        fire.life -= dt;
-        if fire.life <= 0.0 {
-            commands.entity(entity).despawn();
-            continue;
-        }
-
-        let age = (1.0 - fire.life / fire.max_life).clamp(0.0, 1.0);
-        let spread = smoothstep(0.0, 0.4, age) * (1.0 - smoothstep(0.62, 1.0, age));
-        let gate = smoothstep(0.0, 0.18, age) * (1.0 - smoothstep(0.76, 1.0, age));
-        let width = fire.width * (1.0 + 1.2 * spread);
-        // Very slow heat pulse. Do not resize or slide the sprites — that sparkles.
-        let breathe = (now * 1.15 + fire.phase).sin();
-        tf.scale = Vec3::ONE;
-
-        match fire.kind {
-            GrassFireKind::Scorch => {
-                let stain = gate.max(0.24 * (1.0 - age));
-                sprite.color = Color::linear_rgba(
-                    0.10 * stain,
-                    0.035 * stain,
-                    0.012 * stain,
-                    (0.64 * stain).max(0.18),
-                );
-                sprite.custom_size = Some(Vec2::new(width * 3.1, fire.base_h));
-                tf.translation.x = fire.origin.x;
-                tf.translation.y = fire.origin.y - 2.0;
-                tf.rotation = Quat::from_rotation_z(wind_lean * 0.35);
-            }
-            GrassFireKind::Coal => {
-                let heat = (0.94 + 0.04 * breathe) * gate;
-                sprite.color = Color::linear_rgba(
-                    1.02 * heat,
-                    0.22 * heat,
-                    0.035 * heat,
-                    0.88 * gate.max(0.2),
-                );
-                sprite.custom_size = Some(Vec2::new(width * 2.15, fire.base_h));
-                tf.translation.x = fire.origin.x;
-                tf.translation.y = fire.origin.y;
-                tf.rotation = Quat::from_rotation_z(wind_lean * 0.4);
-            }
-            GrassFireKind::Tongue => {
-                tf.translation.x = fire.origin.x + fire.x_off * (1.0 + 0.2 * spread);
-                tf.translation.y = fire.origin.y + fire.base_h * 0.40;
-                tf.rotation = Quat::from_rotation_z(wind_lean);
-                sprite.custom_size = Some(Vec2::new(
-                    fire.base_w * (1.0 + 0.15 * spread),
-                    fire.base_h,
-                ));
-                let heat = (0.90 + 0.04 * breathe) * gate;
-                sprite.color = Color::linear_rgba(
-                    1.06 * heat,
-                    0.28 * heat,
-                    0.04 * heat,
-                    (0.80 * gate).max(0.10),
-                );
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Sparks
 // ---------------------------------------------------------------------------
@@ -2639,27 +2331,17 @@ fn update_sparks(
     time: Res<Time>,
     wind: Res<Wind>,
     tex: Res<ParticleTexture>,
-    fire_tex: Res<GrassFireTexture>,
     scene: Option<Res<SceneRoot>>,
-    hills: Option<Res<FgHillsLighting>>,
     mut budget: ResMut<ParticleBudget>,
     mut sparks: Query<(Entity, &mut Spark, &mut Transform, &mut Sprite)>,
-    mut fires: Query<(&mut GrassFire, &Transform), Without<Spark>>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     let mut rng = thread_rng();
-    let mut ground_hits: Vec<f32> = Vec::new();
 
     for (entity, mut spark, mut tf, mut sprite) in &mut sparks {
         spark.life -= dt;
         if spark.life <= 0.0 || tf.translation.y < GROUND_Y {
-            if tf.translation.y < GROUND_Y && spark.gravity_mul > 0.2 {
-                let x = tf.translation.x;
-                if !ground_hits.iter().any(|h| (h - x).abs() < GRASS_FIRE_MERGE) {
-                    ground_hits.push(x);
-                }
-            }
             budget.sparks = budget.sparks.saturating_sub(1);
             commands.entity(entity).despawn();
             continue;
@@ -2769,20 +2451,6 @@ fn update_sparks(
             0.685
         };
         tf.scale = Vec3::splat(scale);
-    }
-
-    if let Some(hills) = hills.as_deref() {
-        for x in ground_hits {
-            ignite_grass(
-                &mut commands,
-                scene.as_deref(),
-                &fire_tex.0,
-                &mut rng,
-                hills,
-                &mut fires,
-                x,
-            );
-        }
     }
 }
 
