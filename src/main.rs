@@ -1999,9 +1999,9 @@ fn spawn_burst(
         BurstKind::Willow => {
             let gold = Vec3::new(1.0, 0.55, 0.14);
             let n = scale_burst_count(rng.gen_range(70..110), budget);
-            let speed = rng.gen_range(170.0..230.0);
+            let speed = rng.gen_range(128.0..173.0);
             for _ in 0..n {
-                let life = rng.gen_range(3.1..4.3);
+                let life = rng.gen_range(2.3..3.2);
                 spawn_spark(
                     budget,
                     commands,
@@ -2017,7 +2017,7 @@ fn spawn_burst(
                         gravity_mul: 0.92,
                         size: rng.gen_range(2.2..3.0),
                         trail_interval: 0.042,
-                        trail_life: 0.84,
+                        trail_life: 0.63,
                         seed: rng.gen_range(0.0..1.0),
                         ..default()
                     },
