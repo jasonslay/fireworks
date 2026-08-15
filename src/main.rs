@@ -2315,6 +2315,9 @@ fn spawn_comet(
     let crossette = rng.gen_bool(0.18);
     let glitter = Vec3::new(1.0, 0.78, 0.22);
     let silver = Vec3::new(0.92, 0.94, 1.0);
+    // Fade/trail envelopes start around age 0.62–0.80, so life must run
+    // well past the climb or the head dies on the way up.
+    const APEX_AGE: f32 = 0.66;
 
     if origin.y <= GROUND_Y + 40.0 {
         spawn_flash(
@@ -2329,7 +2332,7 @@ fn spawn_comet(
         );
     }
 
-    let light_life = rng.gen_range(1.8..2.4);
+    let light_life = rng.gen_range(3.2..4.6);
     spawn_in_scene(
         commands,
         scene,
@@ -2353,9 +2356,12 @@ fn spawn_comet(
         };
         let dir = mine_dir(rng, spread);
         let drag = rng.gen_range(0.45..0.70);
-        let (speed, t_apex) = speed_for_apex(origin.y, apex_y, drag, gravity_mul);
-        let speed = speed * rng.gen_range(0.96..1.04);
-        let life = (t_apex * rng.gen_range(0.92..1.04)).clamp(0.8, 4.5);
+        let (vy, t_apex) = speed_for_apex(origin.y, apex_y, drag, gravity_mul);
+        let vy = vy * rng.gen_range(0.98..1.04);
+        // Keep the cone tilt but use the solved vertical speed so drag
+        // does not steal the last of the climb.
+        let vel = Vec2::new(dir.x / dir.y.max(0.35) * vy, vy);
+        let life = (t_apex / APEX_AGE * rng.gen_range(0.97..1.06)).clamp(1.2, 8.0);
         let size = rng.gen_range(6.5..8.8);
         spawn_spark(
             budget,
@@ -2364,7 +2370,7 @@ fn spawn_comet(
             tex,
             origin,
             Spark {
-                vel: dir * speed,
+                vel,
                 life,
                 max_life: life,
                 color,
@@ -2374,7 +2380,7 @@ fn spawn_comet(
                 trail_interval: rng.gen_range(0.010..0.016),
                 trail_life: rng.gen_range(0.62..0.92),
                 split_at: if crossette {
-                    rng.gen_range(0.56..0.70)
+                    rng.gen_range(0.70..0.80)
                 } else {
                     0.0
                 },
@@ -2387,7 +2393,7 @@ fn spawn_comet(
         // Seed a streamer behind a mid-air comet so stills and the first
         // frames already show the trail, not just the head.
         if origin.y > GROUND_Y + 60.0 {
-            let back = -dir * 16.0;
+            let back = -vel.normalize_or_zero() * 16.0;
             for i in 1..=10 {
                 let t = i as f32;
                 spawn_trail_bit(
@@ -2397,7 +2403,7 @@ fn spawn_comet(
                     tex,
                     origin + back * t
                         + Vec2::new(rng.gen_range(-2.0..2.0), rng.gen_range(-2.0..2.0)),
-                    dir * speed * 0.05,
+                    vel * 0.05,
                     color,
                     rng.gen_range(0.35..0.7),
                     size * rng.gen_range(0.45..0.75),
@@ -2625,6 +2631,9 @@ fn update_sparks(
         // almost until they burn out — the trail is the swimming body.
         let trail_until = if spark.thrust > 0.0 {
             0.82
+        } else if spark.size >= 6.0 && spark.trail_interval > 0.0 {
+            // Comet heads keep the streamer through apogee.
+            0.88
         } else if spark.gravity_mul > 0.7 {
             0.8
         } else {
