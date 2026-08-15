@@ -1483,9 +1483,9 @@ fn random_kind(rng: &mut ThreadRng) -> BurstKind {
         53..=60 => BurstKind::Ring,
         61..=68 => BurstKind::Crossette,
         69..=77 => BurstKind::Strobe,
-        78..=84 => BurstKind::FlyingFish,
-        85..=90 => BurstKind::Bees,
-        91..=95 => BurstKind::Spinner,
+        78..=83 => BurstKind::FlyingFish,
+        84..=89 => BurstKind::Bees,
+        90..=97 => BurstKind::Spinner,
         _ => BurstKind::Comet,
     }
 }
@@ -2559,19 +2559,17 @@ fn spawn_spinner(
             7..=8 => silver,
             _ => pal.0,
         };
-        let drag = rng.gen_range(0.55..0.85);
+        let drag = rng.gen_range(0.50..0.75);
         let (vy, t_apex) = speed_for_apex(origin.y, apex_y, drag, gravity_mul);
-        // Ballistics plus corkscrew thrust; keep initial speed down so the
-        // helix has time to read before the top.
-        let vy = vy * rng.gen_range(0.42..0.55);
+        let vy = vy * rng.gen_range(0.90..1.05);
         let x_off = if n == 1 {
             rng.gen_range(-8.0..8.0)
         } else {
-            (if i == 0 { -18.0 } else { 18.0 }) + rng.gen_range(-6.0..6.0)
+            (if i == 0 { -22.0 } else { 22.0 }) + rng.gen_range(-6.0..6.0)
         };
         let start = origin + Vec2::new(x_off, 0.0);
         let life = (t_apex / APEX_AGE * rng.gen_range(0.95..1.08)).clamp(1.4, 7.5);
-        let size = rng.gen_range(5.8..7.6);
+        let size = rng.gen_range(6.2..8.2);
         let spin_sign = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
         spawn_spark(
             budget,
@@ -2580,27 +2578,27 @@ fn spawn_spinner(
             tex,
             start,
             Spark {
-                vel: Vec2::new(rng.gen_range(-30.0..30.0), vy),
+                vel: Vec2::new(rng.gen_range(-28.0..28.0), vy),
                 life,
                 max_life: life,
                 color,
                 drag,
                 gravity_mul,
                 size,
-                trail_interval: rng.gen_range(0.009..0.014),
-                trail_life: rng.gen_range(0.55..0.82),
+                trail_interval: rng.gen_range(0.008..0.012),
+                trail_life: rng.gen_range(0.58..0.88),
                 split_at: if rng.gen_bool(0.82) {
                     rng.gen_range(0.68..0.78)
                 } else {
                     0.0
                 },
                 seed: rng.gen_range(0.0..1.0),
-                brightness: rng.gen_range(1.5..2.15),
-                thrust: rng.gen_range(240.0..360.0),
-                heading: std::f32::consts::FRAC_PI_2 + rng.gen_range(-0.12..0.12),
-                wiggle_hz: spin_sign * rng.gen_range(3.6..6.4),
-                wiggle_amp: rng.gen_range(0.78..1.22),
-                turn: spin_sign * rng.gen_range(0.08..0.22),
+                brightness: rng.gen_range(1.65..2.35),
+                thrust: rng.gen_range(160.0..250.0),
+                heading: std::f32::consts::FRAC_PI_2 + rng.gen_range(-0.08..0.08),
+                wiggle_hz: spin_sign * rng.gen_range(5.0..8.2),
+                wiggle_amp: rng.gen_range(0.42..0.62),
+                turn: spin_sign * rng.gen_range(0.06..0.16),
                 ..default()
             },
         );
@@ -2939,12 +2937,25 @@ fn update_sparks(
                 spark.trail_timer += spark.trail_interval;
                 if budget.can_spawn_trail() {
                     let jitter = Vec2::new(rng.gen_range(-1.5..1.5), rng.gen_range(-1.5..1.5));
+                    // Spinners draw a helix around the climb, not just a
+                    // streamer on the head.
+                    let helix = if spark.thrust > 0.0
+                        && spark.size >= 5.5
+                        && spark.wiggle_amp >= 0.35
+                    {
+                        let phase = now * spark.wiggle_hz * TAU + spark.seed * TAU;
+                        let along = spark.vel.normalize_or_zero();
+                        let perp = Vec2::new(-along.y, along.x);
+                        perp * phase.sin() * (spark.size * 2.2)
+                    } else {
+                        Vec2::ZERO
+                    };
                     spawn_trail_bit(
                         &mut budget,
                         &mut commands,
                         scene.as_deref(),
                         &tex.0,
-                        tf.translation.truncate() + jitter,
+                        tf.translation.truncate() + jitter + helix,
                         spark.vel * 0.06,
                         spark.color,
                         spark.trail_life * rng.gen_range(0.7..1.3),
